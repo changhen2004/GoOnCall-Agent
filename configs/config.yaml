@@ -1,0 +1,40 @@
+# GoOnCall Agent 配置示例。使用 ${VAR} 引用环境变量（未设置时展开为空）。
+server:
+  host: 0.0.0.0
+  port: 8080
+
+llm:
+  provider: openai
+  base_url: ${LLM_BASE_URL}
+  api_key: ${LLM_API_KEY}
+  model: ${LLM_MODEL}
+  embedding_model: ${LLM_EMBEDDING_MODEL}
+
+postgres:
+  dsn: ${POSTGRES_DSN}
+
+redis:
+  addr: ${REDIS_ADDR}
+  password: ${REDIS_PASSWORD}
+  db: 0
+
+rabbitmq:
+  url: ${RABBITMQ_URL}
+  management_url: ${RABBITMQ_MANAGEMENT_URL}
+  username: ${RABBITMQ_USERNAME}
+  password: ${RABBITMQ_PASSWORD}
+
+prometheus:
+  url: ${PROMETHEUS_URL}
+
+qdrant:
+  url: ${QDRANT_URL}
+  collection: gooncall_knowledge
+
+agent:
+  max_steps: 15
+  max_tool_calls: 20
+  timeout_seconds: 180
+
+approval:
+  enabled: true
