@@ -22,7 +22,7 @@ func setup(metrics verifier.Metrics) (*Remediation, *incidentservice.Service, *r
 
 	restart := deployment.New(nil, nil)
 	v := verifier.New(verifier.DefaultConfig())
-	gatherer := &SimulatedGatherer{Metrics: metrics}
+	gatherer := &verifier.MockGatherer{Metrics: metrics}
 	pm := postmortem.New()
 	broker := agentruntime.NewStreamBroker()
 

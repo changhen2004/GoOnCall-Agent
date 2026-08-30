@@ -12,15 +12,16 @@ import (
 
 // Config 是 GoOnCall Agent 的全局配置。
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	LLM        LLMConfig        `yaml:"llm"`
-	Postgres   PostgresConfig   `yaml:"postgres"`
-	Redis      RedisConfig      `yaml:"redis"`
-	RabbitMQ   RabbitMQConfig   `yaml:"rabbitmq"`
-	Prometheus PrometheusConfig `yaml:"prometheus"`
-	Qdrant     QdrantConfig     `yaml:"qdrant"`
-	Agent      AgentConfig      `yaml:"agent"`
-	Approval   ApprovalConfig   `yaml:"approval"`
+	Server       ServerConfig       `yaml:"server"`
+	LLM          LLMConfig          `yaml:"llm"`
+	Postgres     PostgresConfig     `yaml:"postgres"`
+	Redis        RedisConfig        `yaml:"redis"`
+	RabbitMQ     RabbitMQConfig     `yaml:"rabbitmq"`
+	Prometheus   PrometheusConfig   `yaml:"prometheus"`
+	Qdrant       QdrantConfig       `yaml:"qdrant"`
+	Agent        AgentConfig        `yaml:"agent"`
+	Approval     ApprovalConfig     `yaml:"approval"`
+	Verification VerificationConfig `yaml:"verification"`
 }
 
 // ServerConfig 是 HTTP 服务配置。
@@ -81,6 +82,11 @@ type ApprovalConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// VerificationConfig 是处置后验证配置。
+type VerificationConfig struct {
+	Mode string `yaml:"mode"`
+}
+
 // Default 返回带安全默认值的配置。
 func Default() *Config {
 	return &Config{
@@ -102,6 +108,9 @@ func Default() *Config {
 		},
 		Approval: ApprovalConfig{
 			Enabled: true,
+		},
+		Verification: VerificationConfig{
+			Mode: "mock",
 		},
 	}
 }

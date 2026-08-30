@@ -71,11 +71,19 @@ func main() {
 	}
 	policyEngine := policy.New(cfg.Approval.Enabled)
 	restartTool := deployment.New(nil, policyEngine)
+	// 验证采集器：按配置切换 Mock / Prometheus 适配
+	var gatherer verifier.MetricGatherer
+	switch cfg.Verification.Mode {
+	case "prometheus":
+		gatherer = verifier.NewPrometheusGatherer(cfg.Prometheus.URL)
+	default:
+		gatherer = verifier.NewMockGatherer()
+	}
 	// 处置编排：Execute -> Verify -> Resolve -> Postmortem
 	remediation := executor.NewRemediation(
 		restartTool,
 		verifier.New(verifier.DefaultConfig()),
-		&executor.SimulatedGatherer{Metrics: verifier.Metrics{ConsumerCount: 5, QueueDepth: 100, ErrorRate: 0.001}},
+		gatherer,
 		svc,
 		runRepo,
 		postmortem.New(),
