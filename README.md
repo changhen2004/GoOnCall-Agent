@@ -1,19 +1,27 @@
 # GoOnCall Agent
 
-> 基于 Go + Eino 的 AIOps Agent Platform —— 把告警接入、故障诊断、知识检索、工具调用、人工审批、自动处置与验证串联为可观测、可恢复、可审计的闭环。
+> 基于 Go + Eino 的 AIOps Agent：告警接入 → ReAct 故障诊断（+ RAG 知识检索）→ 人工审批 → 自动处置（执行/验证/复盘）的可观测闭环。
 
-项目已完成设计文档第 28 节全部七个阶段（Phase 1–7），覆盖 v1.0 验收标准。
+## 已实现能力
 
-## 能力总览
+- **Incident 生命周期**：Alertmanager webhook 创建/关闭工单，指纹去重，严格状态机 `OPEN → INVESTIGATING → WAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED/FAILED`
+- **Eino ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 LLM 时自动降级（analyze 仅做状态流转）
+- **工具集**：Prometheus 指标查询 / RabbitMQ 队列检查 / Runbook 检索 / Incident 历史 / `worker.restart`（模拟重启，MEDIUM 风险，执行前强制人工审批）
+- **RAG 混合检索**：Markdown 加载 → 分块 → Embedding → 内存或 Qdrant 向量库 → 词法 + 向量混合检索（RRF 融合）；向量检索候选集可配置，避免全量扫描
+- **Agent Run 记录**：AgentRun / Step / ToolCall 持久化 + SSE 事件流；`max_steps` / `max_tool_calls` / 整轮诊断超时 + 单次工具超时
+- **HITL 人工审批**：风险策略 → 审批（批准/拒绝）→ 批准后执行处置
+- **自动处置链路**：审批通过 → 执行 `restart_worker` → 指标验证（Mock / Prometheus 可切换）→ 验证通过自动关闭 Incident 并生成 Postmortem，失败置 FAILED
+- **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`，Worker 消费事件并运行诊断 Agent
+- **可观测性**：Prometheus 指标 + `/healthz` `/readyz`
+- **测试与部署**：单元测试 + E2E 流程测试；Docker Compose 一键启动（中间件版本已固定）
 
-- **Incident**：创建 / 指纹去重 / 状态机（OPEN → INVESTIGATING → WAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED）
-- **Eino Agent**：ReAct 诊断 Agent（Supervisor/Diagnosis）+ 工具调用
-- **Tool Runtime**：Prometheus / RabbitMQ / Runbook / Incident 历史 / Restart Worker，带风险等级与审批门控
-- **RAG**：Markdown 加载 → 分块 → Embedding → Qdrant（或内存）→ 混合检索（词法 + 向量，RRF 融合）
-- **Agent Runtime**：AgentRun / Step / ToolCall 持久化 + SSE 流式事件
-- **HITL**：风险策略 → 人工审批 → 批准后执行
-- **自动处置**：restart_worker → 执行后验证 → 自动关闭 Incident → 生成 Postmortem
-- **告警接入**：Prometheus Alertmanager webhook → Incident 创建/关闭
+## 实现边界（如实说明）
+
+- `worker.restart` 为**模拟执行**，不真实操作部署
+- Supervisor 仅保留角色占位，未接入多 Agent 编排
+- SSE 覆盖 Run / Step / Tool 事件流；LLM 输出为一次性返回（无 token 级流式）
+- 去重基于 PostgreSQL 指纹；RabbitMQ 无消费重试；Redis 仅作为基础设施提供，未接入主流程
+- `deploy/k8s` 为空占位，目前仅提供 Docker Compose 部署
 
 ## 快速开始
 
@@ -54,7 +62,7 @@ go run ./cmd/api
 | GET | `/api/v1/runs/:id` | Agent Run 详情 |
 | GET | `/api/v1/runs/:id/steps` | 步骤 |
 | GET | `/api/v1/runs/:id/evidences` | 证据 |
-| GET | `/api/v1/runs/:id/stream` | SSE 流式事件 |
+| GET | `/api/v1/runs/:id/stream` | SSE 事件流 |
 | GET | `/api/v1/approvals/:id` | 审批详情 |
 | POST | `/api/v1/approvals/:id/approve` | 批准（触发处置） |
 | POST | `/api/v1/approvals/:id/reject` | 拒绝 |
@@ -66,19 +74,22 @@ go run ./cmd/api
 cmd/             # api / worker 入口
 internal/
   api/           # handler / router / middleware / dto
-  agent/         # runtime（Eino ReAct）/ diagnosis / supervisor
+  agent/         # runtime（Eino ReAct）/ supervisor（占位）
+  bootstrap/     # 应用装配（config/database/knowledge/tools/messaging/agent/server）
   incident/      # model / service / repository / state_machine
   tool/          # registry / prometheus / rabbitmq / runbook / incident / deployment
-  knowledge/     # loader / splitter / embedding / retriever / vectorstore
-  execution/     # policy / approval / executor / verifier / postmortem
-  messaging/     # RabbitMQ（Phase 4+）
-  storage/       # postgres / redis / qdrant
+  knowledge/     # loader / splitter / embedding / retriever / vectorstore（含 qdrant）
+  execution/     # policy / approval / executor（处置闭环）/ verifier / postmortem
+  messaging/     # RabbitMQ 事件生产/消费（已接入）
+  observability/ # metrics
+  storage/       # postgres / redis
   config/        # 配置加载
 migrations/      # SQL 迁移
 prompts/         # Agent 提示词
 docs/            # Runbook / Postmortem 知识源
-deploy/          # docker / k8s / prometheus
+deploy/          # docker / prometheus
 scripts/         # demo.sh
+tests/           # e2e 流程测试
 ```
 
 ## 技术栈
@@ -87,4 +98,4 @@ Go、Gin、Eino、PostgreSQL、Redis、RabbitMQ、Qdrant、Prometheus、Grafana�
 
 ## 设计文档
 
-完整设计见《GoOnCall-Agent-v1.0-技术设计文档.md》。
+完整设计见《GoOnCall-Agent-v1.0-技术设计文档.md》（其中开发阶段与验收标准为规划内容，实际能力以本 README「已实现能力」与「实现边界」为准）。
