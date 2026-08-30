@@ -4,13 +4,13 @@
 
 ## 已实现能力
 
-- **Incident 生命周期**：Alertmanager webhook 创建/关闭工单，指纹去重（唯一索引兜底高并发重复创建），严格状态机 `OPEN → INVESTIGATING → WAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED/FAILED`；并发状态迁移由 version 乐观锁（CAS）保护，冲突返回 409
+- **Incident 生命周期**：Alertmanager webhook 创建/关闭工单；创建/重开后自动发布 `agent.requested`（全自动链路：告警即诊断）；指纹去重（唯一索引兜底高并发重复创建），**告警复发（同指纹已 RESOLVED）自动重开为 OPEN**；严格状态机 `OPEN → INVESTIGATING → WAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED/FAILED`；并发状态迁移由 version 乐观锁（CAS）保护，冲突返回 409；webhook 单条失败不再静默吞掉（日志 + 指标 + 响应 `errors` 明细）
 - **Eino ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 LLM 时自动降级（analyze 仅做状态流转）
-- **工具集**：Prometheus 指标查询 / RabbitMQ 队列检查 / Runbook 检索 / Incident 历史 / `worker.restart`（模拟重启，MEDIUM 风险，执行前强制人工审批）
+- **工具集**：Prometheus 指标查询 / 活跃告警查询（`prometheus.alerts`，/api/v1/alerts）/ 范围趋势查询（`prometheus.range_query`）/ RabbitMQ 队列检查 / Runbook 检索 / Incident 历史 / `worker.restart`（模拟重启，MEDIUM 风险，执行前强制人工审批）
 - **RAG 混合检索**：Markdown 加载 → 分块 → Embedding → 内存或 Qdrant 向量库 → 词法 + 向量混合检索（RRF 融合）；向量检索候选集可配置，避免全量扫描；启动时按内容哈希增量索引，未变化的 chunk 跳过重新 embedding
 - **Agent Run 记录**：AgentRun / Step / ToolCall 持久化 + SSE 事件流；`max_steps` / `max_tool_calls` / 整轮诊断超时 + 单次工具超时
 - **HITL 人工审批**：风险策略 → 审批（批准/拒绝）→ 批准后执行；执行状态落库（`APPROVED → EXECUTING → EXECUTED/FAILED`），审批记录与实际执行结果一致，审计链完整
-- **自动处置链路**：审批通过 → 执行 `restart_worker` → 指标验证（Mock / Prometheus 可切换）→ 验证通过自动关闭 Incident 并生成 Postmortem，失败置 FAILED
+- **自动处置链路**：审批通过 → 执行 `restart_worker` → 指标验证（Mock / Prometheus 可切换，验证 PromQL 可配置以适配业务系统指标名）→ 验证通过自动关闭 Incident 并生成 Postmortem，失败置 FAILED
 - **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`（publisher confirm 确认投递，不可路由即报错），Worker 消费事件并运行诊断 Agent；消费失败自动重试（最多 3 次、间隔 5s），超过后进入死信队列（DLQ），不会无限 requeue
 - **可观测性**：Prometheus 指标 + `/healthz` `/readyz`
 - **测试与部署**：单元测试 + E2E 流程测试；Docker Compose 一键启动（中间件版本已固定）
@@ -42,12 +42,39 @@ go run ./cmd/api
 ```
 
 > 未设置 POSTGRES_DSN 时回退内存仓库；未设置 LLM 时 analyze 仅做状态流转。
+>
+> 本机 8080 常被 GoCommunity backend 占用，API 可改用 `SERVER_PORT=8082 go run ./cmd/api`；
+> 此时 `demo.sh` 默认即访问 8082，Alertmanager webhook URL 需改为
+> `http://host.docker.internal:8082/api/v1/alerts`（见「告警链路」）。
 
 ### 3. 端到端 Demo
 
 ```bash
 ./scripts/demo.sh
 ```
+
+## 告警链路（业务系统 → Prometheus → Alertmanager → GoOnCall）
+
+完整链路：业务系统 `/metrics` → Prometheus（告警规则评估）→ Alertmanager（分组去重）→ webhook → GoOnCall `/api/v1/alerts` → Incident。
+
+| 环节 | 当前落地 |
+|---|---|
+| 业务系统 | GoCommunity backend（`resource_community_go`，`/metrics` 暴露 `resource_community_http_*`） |
+| Prometheus | GoCommunity 自带实例（宿主机 `:9091`），规则见 `observability/prometheus/alert.rules.yml`（5xx / P95 / up） |
+| Alertmanager | 本仓库 compose 服务（宿主机 `:9093`），配置 `deploy/alertmanager/alertmanager.yml` |
+| 对接 | GoCommunity Prometheus `alerting.alertmanagers → host.docker.internal:9093`（跨网络，prometheus 服务需 `extra_hosts`）；Alertmanager webhook → `http://gooncall-api:8080/api/v1/alerts`（`send_resolved: true`，恢复时关闭 Incident） |
+
+启动与验证：
+
+```bash
+docker compose up -d alertmanager
+
+curl localhost:9093/-/healthy                 # Alertmanager 存活
+curl localhost:9091/api/v1/alertmanagers      # GoCommunity Prometheus 的告警推送目标已激活
+curl localhost:9093/api/v2/alerts             # Alertmanager 实际收到的告警
+```
+
+> 注意：Alertmanager 配置不支持 `${VAR}` 插值（[prometheus/alertmanager#2207](https://github.com/prometheus/alertmanager/issues/2207)），webhook URL 硬编码在 `deploy/alertmanager/alertmanager.yml`。若 API 在宿主机直接运行（`go run ./cmd/api`），把 URL 改为 `http://host.docker.internal:8082/api/v1/alerts`（compose 已为 alertmanager 配置 `extra_hosts: host.docker.internal`）。
 
 ## API 一览
 
