@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"gooncall-agent/internal/incident/model"
@@ -24,8 +25,20 @@ func (p *Postgres) AutoMigrate() error {
 	return p.db.AutoMigrate(&model.Incident{})
 }
 
+// Create 插入 Incident。fingerprint 唯一索引冲突（并发去重竞态）
+// 映射为 ErrConflict，由上层按"已存在"处理。
 func (p *Postgres) Create(ctx context.Context, inc *model.Incident) error {
-	return p.db.WithContext(ctx).Create(inc).Error
+	err := p.db.WithContext(ctx).Create(inc).Error
+	if isUniqueViolation(err) {
+		return ErrConflict
+	}
+	return err
+}
+
+// isUniqueViolation 判断是否为 PostgreSQL unique_violation（SQLSTATE 23505）。
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func (p *Postgres) GetByID(ctx context.Context, id string) (*model.Incident, error) {

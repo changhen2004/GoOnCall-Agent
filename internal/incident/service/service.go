@@ -84,6 +84,13 @@ func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.In
 	}
 
 	if err := s.repo.Create(ctx, inc); err != nil {
+		// 并发去重兜底：fingerprint 唯一索引冲突说明已有人创建，
+		// 返回已有记录（created=false），避免高并发下重复 Incident。
+		if errors.Is(err, repository.ErrConflict) {
+			if existing, gerr := s.repo.GetByFingerprint(ctx, fingerprint); gerr == nil {
+				return existing, false, nil
+			}
+		}
 		return nil, false, err
 	}
 	metrics.IncidentsTotal.WithLabelValues(inc.Service, inc.Severity).Inc()

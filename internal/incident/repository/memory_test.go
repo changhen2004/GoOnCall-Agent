@@ -79,6 +79,24 @@ func TestMemory_CreateConflict(t *testing.T) {
 	}
 }
 
+func TestMemory_CreateFingerprintConflict(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemory()
+
+	a := newTestIncident("inc_1", "svc-a", "OPEN")
+	a.Fingerprint = "fp-1"
+	b := newTestIncident("inc_2", "svc-a", "OPEN")
+	b.Fingerprint = "fp-1"
+
+	if err := repo.Create(ctx, a); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// 不同 ID 但同 fingerprint：唯一约束冲突
+	if err := repo.Create(ctx, b); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Create(same fingerprint) error = %v, want ErrConflict", err)
+	}
+}
+
 func TestMemory_ListFiltersAndPagination(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemory()

@@ -4,7 +4,7 @@
 
 ## 已实现能力
 
-- **Incident 生命周期**：Alertmanager webhook 创建/关闭工单，指纹去重，严格状态机 `OPEN → INVESTIGATING → WAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED/FAILED`；并发状态迁移由 version 乐观锁（CAS）保护，冲突返回 409
+- **Incident 生命周期**：Alertmanager webhook 创建/关闭工单，指纹去重（唯一索引兜底高并发重复创建），严格状态机 `OPEN → INVESTIGATING → WAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED/FAILED`；并发状态迁移由 version 乐观锁（CAS）保护，冲突返回 409
 - **Eino ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 LLM 时自动降级（analyze 仅做状态流转）
 - **工具集**：Prometheus 指标查询 / RabbitMQ 队列检查 / Runbook 检索 / Incident 历史 / `worker.restart`（模拟重启，MEDIUM 风险，执行前强制人工审批）
 - **RAG 混合检索**：Markdown 加载 → 分块 → Embedding → 内存或 Qdrant 向量库 → 词法 + 向量混合检索（RRF 融合）；向量检索候选集可配置，避免全量扫描；启动时按内容哈希增量索引，未变化的 chunk 跳过重新 embedding

@@ -19,11 +19,18 @@ func NewMemory() *Memory {
 	return &Memory{items: make(map[string]*model.Incident)}
 }
 
+// Create 插入 Incident。ID 或 fingerprint 重复返回 ErrConflict
+// （fingerprint 唯一约束与 Postgres 对齐，保证并发去重语义一致）。
 func (m *Memory) Create(_ context.Context, inc *model.Incident) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.items[inc.ID]; ok {
 		return ErrConflict
+	}
+	for _, existing := range m.items {
+		if existing.Fingerprint != "" && existing.Fingerprint == inc.Fingerprint {
+			return ErrConflict
+		}
 	}
 	cp := *inc
 	m.items[inc.ID] = &cp

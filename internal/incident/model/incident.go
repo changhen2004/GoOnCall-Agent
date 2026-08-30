@@ -53,7 +53,7 @@ type Incident struct {
 	Title       string     `json:"title" gorm:"type:varchar(255);not null"`
 	Description string     `json:"description" gorm:"type:text"`
 	AlertName   string     `json:"alert_name" gorm:"type:varchar(255)"`
-	Fingerprint string     `json:"fingerprint" gorm:"type:varchar(128);index:idx_incident_fingerprint"`
+	Fingerprint string     `json:"fingerprint" gorm:"type:varchar(128);uniqueIndex:idx_incident_fingerprint"`
 	Status      Status     `json:"status" gorm:"type:varchar(32);not null;index:idx_incident_status"`
 	StartedAt   time.Time  `json:"started_at" gorm:"not null"`
 	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`

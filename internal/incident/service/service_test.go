@@ -83,6 +83,65 @@ func TestCreate_Validation(t *testing.T) {
 	}
 }
 
+// TestCreate_ConcurrentDedup 验证高并发创建同一指纹 Incident 时只落库一条：
+// 一个请求 created=true，另一个命中去重（检查命中或唯一约束冲突兜底）返回同一记录。
+func TestCreate_ConcurrentDedup(t *testing.T) {
+	svc := newService()
+	start := make(chan struct{})
+	type result struct {
+		inc     *model.Incident
+		created bool
+		err     error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			inc, created, err := svc.Create(context.Background(), CreateIncidentInput{
+				Service: "svc-a", AlertName: "alert-x", Title: "same title",
+			})
+			results <- result{inc: inc, created: created, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var createdCount int
+	var seenID string
+	for r := range results {
+		if r.err != nil {
+			t.Fatalf("Create() error = %v", r.err)
+		}
+		if r.inc == nil {
+			t.Fatal("Create() returned nil incident")
+		}
+		if seenID == "" {
+			seenID = r.inc.ID
+		}
+		if r.inc.ID != seenID {
+			t.Fatalf("dedup returned different ids: %s vs %s", r.inc.ID, seenID)
+		}
+		if r.created {
+			createdCount++
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("created = %d, want 1", createdCount)
+	}
+
+	list, err := svc.List(context.Background(), repository.ListFilter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("incidents stored = %d, want 1 (dedup)", len(list))
+	}
+}
+
 func TestGet_NotFound(t *testing.T) {
 	svc := newService()
 	if _, err := svc.Get(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
