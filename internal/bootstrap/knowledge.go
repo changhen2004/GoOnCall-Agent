@@ -40,7 +40,11 @@ func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
 
 	h := retriever.NewHybrid(chunks, embedder, store, cfg.RAG.CandidateK)
 	if err := h.Index(context.Background()); err != nil {
-		return nil, fmt.Errorf("index knowledge: %w", err)
+		// 向量索引失败（embedding 服务不可用 / 模型不存在等）时降级：
+		// 返回 nil，runbook.search 回退本地词法检索，不阻断 Agent 诊断。
+		// （与 OnCallAgent 的降级策略一致：外部索引失败只记录日志。）
+		slog.Warn("index knowledge failed, fallback to lexical runbook search", "error", err)
+		return nil, nil
 	}
 	return h, nil
 }
