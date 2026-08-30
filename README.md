@@ -11,7 +11,7 @@
 - **Agent Run 记录**：AgentRun / Step / ToolCall 持久化 + SSE 事件流；`max_steps` / `max_tool_calls` / 整轮诊断超时 + 单次工具超时
 - **HITL 人工审批**：风险策略 → 审批（批准/拒绝）→ 批准后执行处置
 - **自动处置链路**：审批通过 → 执行 `restart_worker` → 指标验证（Mock / Prometheus 可切换）→ 验证通过自动关闭 Incident 并生成 Postmortem，失败置 FAILED
-- **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`，Worker 消费事件并运行诊断 Agent；消费失败自动重试（最多 3 次、间隔 5s），超过后进入死信队列（DLQ），不会无限 requeue
+- **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`（publisher confirm 确认投递，不可路由即报错），Worker 消费事件并运行诊断 Agent；消费失败自动重试（最多 3 次、间隔 5s），超过后进入死信队列（DLQ），不会无限 requeue
 - **可观测性**：Prometheus 指标 + `/healthz` `/readyz`
 - **测试与部署**：单元测试 + E2E 流程测试；Docker Compose 一键启动（中间件版本已固定）
 
