@@ -1,6 +1,7 @@
 # GoOnCall Agent 配置示例。使用 ${VAR} 引用环境变量（未设置时展开为空）。
 server:
   host: 0.0.0.0
+  # 可用环境变量 SERVER_PORT 覆盖（本机与 GoCommunity 等占用 8080 时设为 8082）。
   port: 8080
 
 llm:
@@ -55,4 +56,13 @@ approval:
   enabled: true
 
 verification:
-  mode: mock
+  # mock：固定「已恢复」指标（本地 Demo）；prometheus：实时查询验证指标。
+  # 可用环境变量 VERIFICATION_MODE 覆盖（如 VERIFICATION_MODE=prometheus）。
+  mode: ${VERIFICATION_MODE}
+  # Prometheus 验证查询（mode=prometheus 时生效）。对接 GoCommunity 业务系统时
+  # 覆盖为 resource_community_http_* 指标名，例如：
+  #   error_rate: 'sum(rate(resource_community_http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(resource_community_http_requests_total[1m])), 0.001)'
+  queries:
+    consumers: 'sum(rabbitmq_queue_consumers)'
+    queue_depth: 'sum(rabbitmq_queue_messages_ready)'
+    error_rate: 'sum(rate(http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 0.001)'

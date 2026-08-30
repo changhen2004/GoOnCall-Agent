@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -97,7 +98,18 @@ type ApprovalConfig struct {
 
 // VerificationConfig 是处置后验证配置。
 type VerificationConfig struct {
+	// Mode 为 mock（本地 Demo 固定指标）或 prometheus（实时查询验证指标）。
 	Mode string `yaml:"mode"`
+	// Queries 是验证指标对应的 PromQL（Mode=prometheus 时生效）。
+	Queries VerificationQueries `yaml:"queries"`
+}
+
+// VerificationQueries 是验证三项指标（消费者数 / 队列积压 / 5xx 错误率）的 PromQL。
+// 对接不同业务系统时按实际指标名覆盖（如 GoCommunity 的 resource_community_http_*）。
+type VerificationQueries struct {
+	Consumers  string `yaml:"consumers"`
+	QueueDepth string `yaml:"queue_depth"`
+	ErrorRate  string `yaml:"error_rate"`
 }
 
 // VectorStoreConfig 是向量存储配置。
@@ -139,6 +151,11 @@ func Default() *Config {
 		},
 		Verification: VerificationConfig{
 			Mode: "mock",
+			Queries: VerificationQueries{
+				Consumers:  "sum(rabbitmq_queue_consumers)",
+				QueueDepth: "sum(rabbitmq_queue_messages_ready)",
+				ErrorRate:  `sum(rate(http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 0.001)`,
+			},
 		},
 		VectorStore: VectorStoreConfig{
 			Provider: "memory",
@@ -164,6 +181,17 @@ func Load(path string) (*Config, error) {
 	cfg := Default()
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	// 环境变量覆盖：SERVER_PORT 覆盖 server.port。
+	// 本机与 GoCommunity（占用 8080）等共存时，用 SERVER_PORT=8082 运行 API。
+	// （${VAR} 展开不支持默认值语法，故端口覆盖在代码里显式处理。）
+	if v := os.Getenv("SERVER_PORT"); v != "" {
+		p, err := strconv.Atoi(v)
+		if err != nil || p <= 0 || p >= 65536 {
+			return nil, fmt.Errorf("parse SERVER_PORT %q: %w", v, err)
+		}
+		cfg.Server.Port = p
 	}
 
 	return cfg, nil

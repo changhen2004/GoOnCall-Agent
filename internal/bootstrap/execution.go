@@ -13,11 +13,15 @@ import (
 	"gooncall-agent/internal/tool/deployment"
 )
 
-// buildGatherer 按配置切换 Mock / Prometheus 验证采集器。
+// buildGatherer 按配置切换 Mock / Prometheus 验证采集器（PromQL 从配置注入，适配业务系统指标名）。
 func buildGatherer(cfg *config.Config) verifier.MetricGatherer {
 	switch cfg.Verification.Mode {
 	case "prometheus":
-		return verifier.NewPrometheusGatherer(cfg.Prometheus.URL)
+		return verifier.NewPrometheusGatherer(cfg.Prometheus.URL, verifier.Queries{
+			Consumers:  cfg.Verification.Queries.Consumers,
+			QueueDepth: cfg.Verification.Queries.QueueDepth,
+			ErrorRate:  cfg.Verification.Queries.ErrorRate,
+		})
 	default:
 		return verifier.NewMockGatherer()
 	}

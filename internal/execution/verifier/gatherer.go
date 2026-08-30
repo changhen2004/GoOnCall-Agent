@@ -35,24 +35,52 @@ func (g *MockGatherer) Gather(_ context.Context, _ string) (Metrics, error) {
 type PrometheusGatherer struct {
 	client  *http.Client
 	baseURL string
+	queries Queries
 }
 
-// NewPrometheusGatherer 创建 Prometheus 采集器。
-func NewPrometheusGatherer(baseURL string) *PrometheusGatherer {
-	return &PrometheusGatherer{client: &http.Client{}, baseURL: strings.TrimRight(baseURL, "/")}
+// Queries 是验证指标对应的 PromQL（Mode=prometheus 时使用），
+// 由配置注入以适配不同业务系统的指标命名。
+type Queries struct {
+	Consumers  string
+	QueueDepth string
+	ErrorRate  string
 }
 
-// Gather 查询消费者数、队列积压与 5xx 错误率。
+// DefaultQueries 返回默认 PromQL（rabbitmq_exporter + http_requests_total 语义）。
+func DefaultQueries() Queries {
+	return Queries{
+		Consumers:  "sum(rabbitmq_queue_consumers)",
+		QueueDepth: "sum(rabbitmq_queue_messages_ready)",
+		ErrorRate:  `sum(rate(http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 0.001)`,
+	}
+}
+
+// NewPrometheusGatherer 创建 Prometheus 采集器；queries 中为空字段回退默认值。
+func NewPrometheusGatherer(baseURL string, queries Queries) *PrometheusGatherer {
+	def := DefaultQueries()
+	if queries.Consumers == "" {
+		queries.Consumers = def.Consumers
+	}
+	if queries.QueueDepth == "" {
+		queries.QueueDepth = def.QueueDepth
+	}
+	if queries.ErrorRate == "" {
+		queries.ErrorRate = def.ErrorRate
+	}
+	return &PrometheusGatherer{client: &http.Client{}, baseURL: strings.TrimRight(baseURL, "/"), queries: queries}
+}
+
+// Gather 查询消费者数、队列积压与 5xx 错误率（PromQL 来自配置）。
 func (g *PrometheusGatherer) Gather(ctx context.Context, _ string) (Metrics, error) {
-	consumers, err := g.queryScalar(ctx, "sum(rabbitmq_queue_consumers)")
+	consumers, err := g.queryScalar(ctx, g.queries.Consumers)
 	if err != nil {
 		return Metrics{}, err
 	}
-	depth, err := g.queryScalar(ctx, "sum(rabbitmq_queue_messages_ready)")
+	depth, err := g.queryScalar(ctx, g.queries.QueueDepth)
 	if err != nil {
 		return Metrics{}, err
 	}
-	errorRate, err := g.queryScalar(ctx, `sum(rate(http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 0.001)`)
+	errorRate, err := g.queryScalar(ctx, g.queries.ErrorRate)
 	if err != nil {
 		return Metrics{}, err
 	}
