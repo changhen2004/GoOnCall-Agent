@@ -22,9 +22,10 @@ type Producer struct {
 	conn *amqp.Connection
 }
 
-// NewProducer 创建 Producer 并声明交换机。
+// NewProducer 创建 Producer：幂等声明交换机 + 主队列 + agent.requested 绑定。
+// 发布端先声明拓扑，保证 Worker 晚启动时事件仍可路由（排队等待消费，不丢事件）。
 func NewProducer(conn *amqp.Connection) (*Producer, error) {
-	if err := DeclareExchange(conn); err != nil {
+	if err := EnsureRoute(conn, QueueAgent, AgentRequested); err != nil {
 		return nil, err
 	}
 	return &Producer{conn: conn}, nil

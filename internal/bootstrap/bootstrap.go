@@ -94,7 +94,7 @@ func (a *App) RunWorker(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	consumer := messaging.NewConsumer(conn, "gooncall.agent.queue")
+	consumer := messaging.NewConsumer(conn, messaging.QueueAgent)
 	slog.Info("gooncall worker started", "routing_key", messaging.AgentRequested)
 	return consumer.Subscribe(ctx, messaging.AgentRequested, a.handleAgentRequested)
 }
