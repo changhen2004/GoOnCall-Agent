@@ -1,0 +1,31 @@
+# GoOnCall Agent Alertmanager 配置。
+#
+# 职责：接收 Prometheus 推送的告警，按告警分组去重后，通过 webhook 投递给
+# GoOnCall API（POST /api/v1/alerts），由 API 创建/关闭 Incident。
+#
+# 链路：业务系统 /metrics -> Prometheus（alert.rules）-> Alertmanager -> GoOnCall API
+#
+# 注意：Alertmanager 配置不支持 ${VAR} 环境变量插值（见 prometheus/alertmanager#2207），
+# webhook URL 需硬编码。默认指向 compose 同网络下的 gooncall-api 容器；
+# 若 API 在宿主机直接运行（go run ./cmd/api，端口 8082），
+# 请把 URL 改为 http://host.docker.internal:8082/api/v1/alerts
+# （compose 中 alertmanager 服务已配置 extra_hosts: host.docker.internal）。
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: gooncall
+  # 按告警名 + 服务分组：同一故障的多条告警合并为一次通知，
+  # 避免 webhook 收到大量重复告警（配合 GoOnCall 指纹去重）。
+  group_by: ['alertname', 'service']
+  # 本地 Demo 调低等待时间，让告警尽快到达 webhook；生产可调大。
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: gooncall
+    webhook_configs:
+      - url: 'http://gooncall-api:8080/api/v1/alerts'
+        # 告警恢复时也推送 resolved 通知，GoOnCall 据此关闭 Incident。
+        send_resolved: true

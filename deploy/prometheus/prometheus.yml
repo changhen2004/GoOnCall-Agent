@@ -2,6 +2,14 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# 告警推送到同网络下的 Alertmanager（业务系统告警由 GoCommunity 侧 Prometheus 负责，
+# 见 docs/architecture 与 README「告警链路」；此处配置保证本 Prometheus 自身规则
+# 也能复用同一 Alertmanager）。
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: gooncall
     static_configs:

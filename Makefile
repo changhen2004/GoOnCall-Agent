@@ -43,7 +43,7 @@ tidy: ## 整理依赖
 	go mod tidy
 
 up: ## 启动 docker compose 基础设施
-	docker compose up -d postgres redis rabbitmq prometheus qdrant grafana
+	docker compose up -d postgres redis rabbitmq prometheus alertmanager qdrant grafana
 
 down: ## 停止 docker compose
 	docker compose down
