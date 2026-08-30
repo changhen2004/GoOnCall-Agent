@@ -1,35 +1,28 @@
-// GoOnCall Agent Worker 入口（事件消费者，Phase 4 起接入 RabbitMQ）。
+// GoOnCall Agent Worker 入口：消费 RabbitMQ 事件并运行 Agent。
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"gooncall-agent/internal/config"
+	"gooncall-agent/internal/bootstrap"
 )
 
 func main() {
-	cfgPath := os.Getenv("CONFIG_PATH")
-	if cfgPath == "" {
-		cfgPath = "configs/config.yaml"
-	}
-
-	cfg, err := config.Load(cfgPath)
+	app, err := bootstrap.New()
 	if err != nil {
-		slog.Error("load config", "error", err, "path", cfgPath)
+		slog.Error("bootstrap", "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("gooncall worker started",
-		"rabbitmq_url", cfg.RabbitMQ.URL,
-		"note", "事件消费者将在 Phase 4 接入 agent.queue / action.queue",
-	)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
-	// 保持进程存活，等待优雅退出（后续阶段替换为 RabbitMQ 消费循环）。
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-	slog.Info("gooncall worker stopped")
+	if err := app.RunWorker(ctx); err != nil {
+		slog.Error("worker error", "error", err)
+		os.Exit(1)
+	}
 }

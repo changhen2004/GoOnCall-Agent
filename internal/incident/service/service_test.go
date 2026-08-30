@@ -111,6 +111,12 @@ func TestResolve_SetsResolvedAt(t *testing.T) {
 	if _, err := svc.Analyze(ctx, inc.ID); err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
+	// 严格状态机：INVESTIGATING -> WAITING_APPROVAL -> MITIGATING -> VERIFYING -> RESOLVED
+	for _, next := range []model.Status{model.StatusWaitingApproval, model.StatusMitigating, model.StatusVerifying} {
+		if _, err := svc.MoveTo(ctx, inc.ID, next); err != nil {
+			t.Fatalf("MoveTo(%s) error = %v", next, err)
+		}
+	}
 
 	got, err := svc.Resolve(ctx, inc.ID)
 	if err != nil {

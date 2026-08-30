@@ -30,11 +30,21 @@ prometheus:
 qdrant:
   url: ${QDRANT_URL}
   collection: gooncall_knowledge
+  dim: 1536
+
+vector_store:
+  provider: memory
 
 agent:
   max_steps: 15
   max_tool_calls: 20
   timeout_seconds: 180
 
+tool:
+  timeout_seconds: 30
+
 approval:
   enabled: true
+
+verification:
+  mode: mock

@@ -1,0 +1,45 @@
+package bootstrap
+
+import (
+	"gooncall-agent/internal/config"
+	"gooncall-agent/internal/incident/repository"
+	"gooncall-agent/internal/knowledge/retriever"
+	incidenttool "gooncall-agent/internal/tool/incident"
+	"gooncall-agent/internal/tool/prometheus"
+	"gooncall-agent/internal/tool/rabbitmq"
+	"gooncall-agent/internal/tool/registry"
+	"gooncall-agent/internal/tool/runbook"
+)
+
+// buildToolRegistry 注册核心只读工具（按配置启用）。
+func buildToolRegistry(cfg *config.Config, repo repository.Repository, rag retriever.Retriever) *registry.Registry {
+	reg := registry.New()
+
+	if t, err := incidenttool.New(repo).EinoTool(); err == nil {
+		_ = reg.Register(t, registry.RiskLow)
+	}
+
+	var runbookTool *runbook.Tool
+	if rag != nil {
+		runbookTool = runbook.NewWithRetriever(rag)
+	} else {
+		runbookTool = runbook.New("docs")
+	}
+	if t, err := runbookTool.EinoTool(); err == nil {
+		_ = reg.Register(t, registry.RiskLow)
+	}
+
+	if cfg.Prometheus.URL != "" {
+		if t, err := prometheus.New(cfg.Prometheus.URL).EinoTool(); err == nil {
+			_ = reg.Register(t, registry.RiskLow)
+		}
+	}
+
+	if cfg.RabbitMQ.ManagementURL != "" {
+		if t, err := rabbitmq.New(cfg.RabbitMQ.ManagementURL, cfg.RabbitMQ.Username, cfg.RabbitMQ.Password).EinoTool(); err == nil {
+			_ = reg.Register(t, registry.RiskLow)
+		}
+	}
+
+	return reg
+}

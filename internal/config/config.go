@@ -12,15 +12,18 @@ import (
 
 // Config 是 GoOnCall Agent 的全局配置。
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	LLM        LLMConfig        `yaml:"llm"`
-	Postgres   PostgresConfig   `yaml:"postgres"`
-	Redis      RedisConfig      `yaml:"redis"`
-	RabbitMQ   RabbitMQConfig   `yaml:"rabbitmq"`
-	Prometheus PrometheusConfig `yaml:"prometheus"`
-	Qdrant     QdrantConfig     `yaml:"qdrant"`
-	Agent      AgentConfig      `yaml:"agent"`
-	Approval   ApprovalConfig   `yaml:"approval"`
+	Server       ServerConfig       `yaml:"server"`
+	LLM          LLMConfig          `yaml:"llm"`
+	Postgres     PostgresConfig     `yaml:"postgres"`
+	Redis        RedisConfig        `yaml:"redis"`
+	RabbitMQ     RabbitMQConfig     `yaml:"rabbitmq"`
+	Prometheus   PrometheusConfig   `yaml:"prometheus"`
+	Qdrant       QdrantConfig       `yaml:"qdrant"`
+	Agent        AgentConfig        `yaml:"agent"`
+	Approval     ApprovalConfig     `yaml:"approval"`
+	Verification VerificationConfig `yaml:"verification"`
+	VectorStore  VectorStoreConfig  `yaml:"vector_store"`
+	Tool         ToolConfig         `yaml:"tool"`
 }
 
 // ServerConfig 是 HTTP 服务配置。
@@ -67,6 +70,7 @@ type PrometheusConfig struct {
 type QdrantConfig struct {
 	URL        string `yaml:"url"`
 	Collection string `yaml:"collection"`
+	Dim        uint64 `yaml:"dim"`
 }
 
 // AgentConfig 是 Agent 运行时约束配置。
@@ -79,6 +83,21 @@ type AgentConfig struct {
 // ApprovalConfig 是人工审批配置。
 type ApprovalConfig struct {
 	Enabled bool `yaml:"enabled"`
+}
+
+// VerificationConfig 是处置后验证配置。
+type VerificationConfig struct {
+	Mode string `yaml:"mode"`
+}
+
+// VectorStoreConfig 是向量存储配置。
+type VectorStoreConfig struct {
+	Provider string `yaml:"provider"`
+}
+
+// ToolConfig 是工具执行配置。
+type ToolConfig struct {
+	TimeoutSeconds int `yaml:"timeout_seconds"`
 }
 
 // Default 返回带安全默认值的配置。
@@ -94,6 +113,7 @@ func Default() *Config {
 		},
 		Qdrant: QdrantConfig{
 			Collection: "gooncall_knowledge",
+			Dim:        1536,
 		},
 		Agent: AgentConfig{
 			MaxSteps:       15,
@@ -102,6 +122,15 @@ func Default() *Config {
 		},
 		Approval: ApprovalConfig{
 			Enabled: true,
+		},
+		Verification: VerificationConfig{
+			Mode: "mock",
+		},
+		VectorStore: VectorStoreConfig{
+			Provider: "memory",
+		},
+		Tool: ToolConfig{
+			TimeoutSeconds: 30,
 		},
 	}
 }

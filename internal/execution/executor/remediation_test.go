@@ -22,7 +22,7 @@ func setup(metrics verifier.Metrics) (*Remediation, *incidentservice.Service, *r
 
 	restart := deployment.New(nil, nil)
 	v := verifier.New(verifier.DefaultConfig())
-	gatherer := &SimulatedGatherer{Metrics: metrics}
+	gatherer := &verifier.MockGatherer{Metrics: metrics}
 	pm := postmortem.New()
 	broker := agentruntime.NewStreamBroker()
 
@@ -37,6 +37,12 @@ func createIncidentAndRun(t *testing.T, incidentSvc *incidentservice.Service, ru
 	}
 	if _, err := incidentSvc.Analyze(context.Background(), inc.ID); err != nil {
 		t.Fatalf("Analyze() error = %v", err)
+	}
+	// 严格状态机：走到 MITIGATING（处置执行前）
+	for _, next := range []model.Status{model.StatusWaitingApproval, model.StatusMitigating} {
+		if _, err := incidentSvc.MoveTo(context.Background(), inc.ID, next); err != nil {
+			t.Fatalf("MoveTo(%s) error = %v", next, err)
+		}
 	}
 	now := time.Now()
 	_ = runRepo.CreateRun(context.Background(), &model.AgentRun{

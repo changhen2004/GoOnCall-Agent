@@ -14,26 +14,11 @@ import (
 	"gooncall-agent/internal/tool/deployment"
 )
 
-// MetricGatherer 采集处置后的验证指标。
-type MetricGatherer interface {
-	Gather(ctx context.Context, inc *model.Incident) (verifier.Metrics, error)
-}
-
-// SimulatedGatherer 返回固定的「已恢复」指标（无真实基础设施时的演示实现）。
-type SimulatedGatherer struct {
-	Metrics verifier.Metrics
-}
-
-// Gather 返回预置指标。
-func (g *SimulatedGatherer) Gather(_ context.Context, _ *model.Incident) (verifier.Metrics, error) {
-	return g.Metrics, nil
-}
-
 // Remediation 编排处置闭环。
 type Remediation struct {
 	restart     *deployment.Tool
 	verifier    *verifier.Verifier
-	gatherer    MetricGatherer
+	gatherer    verifier.MetricGatherer
 	incidentSvc *incidentservice.Service
 	runRepo     repository.RunRepository
 	postmortem  *postmortem.Generator
@@ -44,7 +29,7 @@ type Remediation struct {
 func NewRemediation(
 	restart *deployment.Tool,
 	v *verifier.Verifier,
-	gatherer MetricGatherer,
+	gatherer verifier.MetricGatherer,
 	incidentSvc *incidentservice.Service,
 	runRepo repository.RunRepository,
 	pm *postmortem.Generator,
@@ -74,39 +59,39 @@ func (r *Remediation) Execute(ctx context.Context, action, arguments, runID stri
 
 	// 2. 根据 run 定位 incident
 	incidentID := ""
-	var inc *model.Incident
 	if r.runRepo != nil && runID != "" {
 		if run, err := r.runRepo.GetRun(ctx, runID); err == nil {
 			incidentID = run.IncidentID
 		}
 	}
+
+	// 3. 进入验证阶段：MITIGATING -> VERIFYING
 	if incidentID != "" && r.incidentSvc != nil {
-		if got, err := r.incidentSvc.Get(ctx, incidentID); err == nil {
-			inc = got
-		}
+		_, _ = r.incidentSvc.MoveTo(ctx, incidentID, model.StatusVerifying)
 	}
 
-	// 3. 采集指标 + 验证
+	// 4. 采集指标 + 验证
 	metrics := verifier.Metrics{}
-	if r.gatherer != nil && inc != nil {
-		if m, err := r.gatherer.Gather(ctx, inc); err == nil {
+	if r.gatherer != nil && incidentID != "" {
+		if m, err := r.gatherer.Gather(ctx, incidentID); err == nil {
 			metrics = m
 		}
 	}
 	result := r.verifier.Verify(metrics)
 
-	// 4. 验证通过 -> 自动关闭 + 生成复盘
+	// 5. 验证通过 -> RESOLVED + 生成复盘；失败 -> FAILED
 	res := RemediationResult{Status: "completed", Verified: result.Passed, Checks: result.Checks}
 	if result.Passed && incidentID != "" && r.incidentSvc != nil {
-		if resolved, err := r.incidentSvc.Resolve(ctx, incidentID); err == nil {
+		if resolved, err := r.incidentSvc.MoveTo(ctx, incidentID, model.StatusResolved); err == nil {
 			res.IncidentID = incidentID
 			if r.postmortem != nil {
 				res.Postmortem = r.postmortem.Generate(resolved, "worker restart 后指标恢复", checkDetails(result.Checks), "restart worker")
 			}
 			r.publish(runID, "incident.resolved", map[string]any{"incident_id": incidentID})
 		}
-	} else if !result.Passed {
+	} else if !result.Passed && incidentID != "" && r.incidentSvc != nil {
 		res.Status = "verify_failed"
+		_, _ = r.incidentSvc.MoveTo(ctx, incidentID, model.StatusFailed)
 		r.publish(runID, "incident.verify_failed", map[string]any{"incident_id": incidentID})
 	}
 
