@@ -11,15 +11,13 @@ func TestCanTransition_ValidTransitions(t *testing.T) {
 		from, to model.Status
 	}{
 		{model.StatusOpen, model.StatusInvestigating},
-		{model.StatusInvestigating, model.StatusNeedApproval},
-		{model.StatusInvestigating, model.StatusResolved},
-		{model.StatusNeedApproval, model.StatusWaitingApproval},
+		{model.StatusInvestigating, model.StatusWaitingApproval},
 		{model.StatusWaitingApproval, model.StatusMitigating},
 		{model.StatusWaitingApproval, model.StatusFailed},
 		{model.StatusMitigating, model.StatusVerifying},
+		{model.StatusMitigating, model.StatusFailed},
 		{model.StatusVerifying, model.StatusResolved},
-		{model.StatusVerifying, model.StatusInvestigating},
-		{model.StatusOpen, model.StatusCancelled},
+		{model.StatusVerifying, model.StatusFailed},
 	}
 	for _, c := range cases {
 		if !CanTransition(c.from, c.to) {
@@ -28,16 +26,18 @@ func TestCanTransition_ValidTransitions(t *testing.T) {
 	}
 }
 
-func TestCanTransition_InvalidTransitions(t *testing.T) {
+func TestCanTransition_ForbiddenTransitions(t *testing.T) {
 	cases := []struct {
 		from, to model.Status
 	}{
-		{model.StatusOpen, model.StatusResolved},          // 跳过调查直接关闭
-		{model.StatusResolved, model.StatusInvestigating}, // 终态不可回退
+		// 关键禁止：INVESTIGATING 直接 RESOLVED
+		{model.StatusInvestigating, model.StatusResolved},
+		{model.StatusOpen, model.StatusResolved},
+		{model.StatusOpen, model.StatusWaitingApproval},
+		{model.StatusMitigating, model.StatusResolved},
+		{model.StatusWaitingApproval, model.StatusResolved},
+		{model.StatusResolved, model.StatusInvestigating},
 		{model.StatusFailed, model.StatusOpen},
-		{model.StatusCancelled, model.StatusInvestigating},
-		{model.StatusMitigating, model.StatusOpen}, // 处置中不可回到 OPEN
-		{model.StatusWaitingApproval, model.StatusOpen},
 	}
 	for _, c := range cases {
 		if CanTransition(c.from, c.to) {
@@ -46,15 +46,23 @@ func TestCanTransition_InvalidTransitions(t *testing.T) {
 	}
 }
 
-func TestTransition_ReturnsErrorOnInvalid(t *testing.T) {
-	if err := Transition(model.StatusOpen, model.StatusResolved); err == nil {
-		t.Fatal("Transition(OPEN, RESOLVED) expected error, got nil")
+func TestTransition_ReturnsErrorOnForbidden(t *testing.T) {
+	if err := Transition(model.StatusInvestigating, model.StatusResolved); err == nil {
+		t.Fatal("Transition(INVESTIGATING, RESOLVED) expected error, got nil")
 	}
 }
 
 func TestTransition_NoErrorOnValid(t *testing.T) {
 	if err := Transition(model.StatusOpen, model.StatusInvestigating); err != nil {
 		t.Fatalf("Transition(OPEN, INVESTIGATING) error = %v", err)
+	}
+}
+
+func TestTransition_ErrorType(t *testing.T) {
+	err := Transition(model.StatusOpen, model.StatusResolved)
+	_, ok := err.(*TransitionError)
+	if !ok {
+		t.Fatalf("error type = %T, want *TransitionError", err)
 	}
 }
 
@@ -68,22 +76,7 @@ func TestAllowedTargets_TerminalIsEmpty(t *testing.T) {
 
 func TestAllowedTargets_Investigating(t *testing.T) {
 	got := AllowedTargets(model.StatusInvestigating)
-	if len(got) == 0 {
-		t.Fatal("AllowedTargets(INVESTIGATING) should not be empty")
-	}
-	want := map[model.Status]bool{
-		model.StatusNeedApproval: true,
-		model.StatusResolved:     true,
-		model.StatusFailed:       true,
-		model.StatusCancelled:    true,
-	}
-	for _, s := range got {
-		if !want[s] {
-			t.Errorf("unexpected target %s", s)
-		}
-		delete(want, s)
-	}
-	if len(want) != 0 {
-		t.Errorf("missing targets: %v", want)
+	if len(got) != 1 || got[0] != model.StatusWaitingApproval {
+		t.Fatalf("AllowedTargets(INVESTIGATING) = %v, want [WAITING_APPROVAL]", got)
 	}
 }

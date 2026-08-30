@@ -86,7 +86,12 @@ func (r *Remediation) Execute(ctx context.Context, action, arguments, runID stri
 		}
 	}
 
-	// 3. 采集指标 + 验证
+	// 3. 进入验证阶段：MITIGATING -> VERIFYING
+	if incidentID != "" && r.incidentSvc != nil {
+		_, _ = r.incidentSvc.MoveTo(ctx, incidentID, model.StatusVerifying)
+	}
+
+	// 4. 采集指标 + 验证
 	metrics := verifier.Metrics{}
 	if r.gatherer != nil && inc != nil {
 		if m, err := r.gatherer.Gather(ctx, inc); err == nil {
@@ -95,18 +100,19 @@ func (r *Remediation) Execute(ctx context.Context, action, arguments, runID stri
 	}
 	result := r.verifier.Verify(metrics)
 
-	// 4. 验证通过 -> 自动关闭 + 生成复盘
+	// 5. 验证通过 -> RESOLVED + 生成复盘；失败 -> FAILED
 	res := RemediationResult{Status: "completed", Verified: result.Passed, Checks: result.Checks}
 	if result.Passed && incidentID != "" && r.incidentSvc != nil {
-		if resolved, err := r.incidentSvc.Resolve(ctx, incidentID); err == nil {
+		if resolved, err := r.incidentSvc.MoveTo(ctx, incidentID, model.StatusResolved); err == nil {
 			res.IncidentID = incidentID
 			if r.postmortem != nil {
 				res.Postmortem = r.postmortem.Generate(resolved, "worker restart 后指标恢复", checkDetails(result.Checks), "restart worker")
 			}
 			r.publish(runID, "incident.resolved", map[string]any{"incident_id": incidentID})
 		}
-	} else if !result.Passed {
+	} else if !result.Passed && incidentID != "" && r.incidentSvc != nil {
 		res.Status = "verify_failed"
+		_, _ = r.incidentSvc.MoveTo(ctx, incidentID, model.StatusFailed)
 		r.publish(runID, "incident.verify_failed", map[string]any{"incident_id": incidentID})
 	}
 

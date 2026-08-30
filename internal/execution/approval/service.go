@@ -11,6 +11,7 @@ import (
 	agentruntime "gooncall-agent/internal/agent/runtime"
 	"gooncall-agent/internal/incident/model"
 	"gooncall-agent/internal/incident/repository"
+	incidentservice "gooncall-agent/internal/incident/service"
 	"gooncall-agent/internal/observability/metrics"
 )
 
@@ -28,14 +29,35 @@ type ActionExecutor interface {
 
 // Service 是审批服务，负责请求、批准、拒绝并发布事件。
 type Service struct {
-	repo     repository.ApprovalRepository
-	broker   *agentruntime.StreamBroker
-	executor ActionExecutor
+	repo        repository.ApprovalRepository
+	broker      *agentruntime.StreamBroker
+	executor    ActionExecutor
+	incidentSvc *incidentservice.Service
+	runRepo     repository.RunRepository
 }
 
 // New 创建审批服务。
 func New(repo repository.ApprovalRepository, broker *agentruntime.StreamBroker, executor ActionExecutor) *Service {
 	return &Service{repo: repo, broker: broker, executor: executor}
+}
+
+// WithIncidentState 注入 Incident 状态管理（用于审批状态闭环迁移）。
+func (s *Service) WithIncidentState(incidentSvc *incidentservice.Service, runRepo repository.RunRepository) *Service {
+	s.incidentSvc = incidentSvc
+	s.runRepo = runRepo
+	return s
+}
+
+// moveIncident 根据 runID 解析 incident 并迁移状态（未配置时静默跳过）。
+func (s *Service) moveIncident(ctx context.Context, runID string, next model.Status) {
+	if s.incidentSvc == nil || s.runRepo == nil || runID == "" {
+		return
+	}
+	run, err := s.runRepo.GetRun(ctx, runID)
+	if err != nil {
+		return
+	}
+	_, _ = s.incidentSvc.MoveTo(ctx, run.IncidentID, next)
 }
 
 // Request 创建一条 PENDING 审批并发布 approval.required 事件。
@@ -54,6 +76,7 @@ func (s *Service) Request(ctx context.Context, runID, toolCallID, action, argume
 		return nil, err
 	}
 	metrics.ApprovalsTotal.WithLabelValues(a.Action, string(model.ApprovalPending)).Inc()
+	s.moveIncident(ctx, runID, model.StatusWaitingApproval)
 	s.publish(a.RunID, "approval.required", map[string]any{"approval_id": a.ID, "action": a.Action})
 	return a, nil
 }
@@ -76,6 +99,7 @@ func (s *Service) Approve(ctx context.Context, id, approvedBy string) (*model.Ap
 		return nil, err
 	}
 	metrics.ApprovalsTotal.WithLabelValues(a.Action, string(model.ApprovalApproved)).Inc()
+	s.moveIncident(ctx, a.RunID, model.StatusMitigating)
 	s.publish(a.RunID, "action.approved", map[string]any{"approval_id": a.ID, "action": a.Action})
 
 	if s.executor != nil {
@@ -107,6 +131,7 @@ func (s *Service) Reject(ctx context.Context, id, rejectedBy string) (*model.App
 		return nil, err
 	}
 	metrics.ApprovalsTotal.WithLabelValues(a.Action, string(model.ApprovalRejected)).Inc()
+	s.moveIncident(ctx, a.RunID, model.StatusFailed)
 	s.publish(a.RunID, "action.rejected", map[string]any{"approval_id": a.ID, "action": a.Action})
 	return a, nil
 }

@@ -46,7 +46,7 @@ func (h *AlertHandler) Webhook(c *gin.Context) {
 
 		if alert.Status == "resolved" {
 			fp := model.Fingerprint(service, alertName, title)
-			if inc, err := h.service.ResolveByFingerprint(c.Request.Context(), fp); err == nil && inc.Status == model.StatusResolved {
+			if inc, err := h.service.ResolveExternally(c.Request.Context(), fp); err == nil && inc.Status == model.StatusResolved {
 				resolved = append(resolved, inc.ID)
 			}
 		} else {

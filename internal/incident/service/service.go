@@ -98,21 +98,23 @@ func (s *Service) GetByFingerprint(ctx context.Context, fingerprint string) (*mo
 	return s.repo.GetByFingerprint(ctx, fingerprint)
 }
 
-// ResolveByFingerprint 按指纹关闭 Incident（OPEN 先转 INVESTIGATING 再关闭）。
-func (s *Service) ResolveByFingerprint(ctx context.Context, fingerprint string) (*model.Incident, error) {
+// ResolveExternally 由外部告警恢复触发，直接关闭 Incident（绕过 Agent 审批/处置流程）。
+func (s *Service) ResolveExternally(ctx context.Context, fingerprint string) (*model.Incident, error) {
 	inc, err := s.repo.GetByFingerprint(ctx, fingerprint)
 	if err != nil {
 		return nil, err
 	}
-	if inc.Status == model.StatusOpen {
-		if inc, err = s.Analyze(ctx, inc.ID); err != nil {
-			return nil, err
-		}
-	}
 	if inc.Status.IsTerminal() {
 		return inc, nil
 	}
-	return s.Resolve(ctx, inc.ID)
+	now := time.Now()
+	inc.Status = model.StatusResolved
+	inc.ResolvedAt = &now
+	inc.UpdatedAt = now
+	if err := s.repo.Update(ctx, inc); err != nil {
+		return nil, err
+	}
+	return inc, nil
 }
 
 // List 按过滤条件查询 Incident 列表。
@@ -144,12 +146,17 @@ func (s *Service) Transition(ctx context.Context, id string, to model.Status) (*
 	return inc, nil
 }
 
+// MoveTo 执行一次受严格状态机约束的状态迁移（v1.1 状态闭环）。
+func (s *Service) MoveTo(ctx context.Context, id string, next model.Status) (*model.Incident, error) {
+	return s.Transition(ctx, id, next)
+}
+
 // Analyze 将 Incident 置为 INVESTIGATING（OPEN -> INVESTIGATING）。
 func (s *Service) Analyze(ctx context.Context, id string) (*model.Incident, error) {
 	return s.Transition(ctx, id, model.StatusInvestigating)
 }
 
-// Resolve 将 Incident 置为 RESOLVED（INVESTIGATING/VERIFYING -> RESOLVED）。
+// Resolve 将 Incident 置为 RESOLVED（仅 VERIFYING -> RESOLVED）。
 func (s *Service) Resolve(ctx context.Context, id string) (*model.Incident, error) {
 	return s.Transition(ctx, id, model.StatusResolved)
 }
