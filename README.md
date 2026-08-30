@@ -11,7 +11,7 @@
 - **Agent Run 记录**：AgentRun / Step / ToolCall 持久化 + SSE 事件流；`max_steps` / `max_tool_calls` / 整轮诊断超时 + 单次工具超时
 - **HITL 人工审批**：风险策略 → 审批（批准/拒绝）→ 批准后执行处置
 - **自动处置链路**：审批通过 → 执行 `restart_worker` → 指标验证（Mock / Prometheus 可切换）→ 验证通过自动关闭 Incident 并生成 Postmortem，失败置 FAILED
-- **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`，Worker 消费事件并运行诊断 Agent
+- **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`，Worker 消费事件并运行诊断 Agent；消费失败自动重试（最多 3 次、间隔 5s），超过后进入死信队列（DLQ），不会无限 requeue
 - **可观测性**：Prometheus 指标 + `/healthz` `/readyz`
 - **测试与部署**：单元测试 + E2E 流程测试；Docker Compose 一键启动（中间件版本已固定）
 
@@ -20,7 +20,7 @@
 - `worker.restart` 为**模拟执行**，不真实操作部署
 - Supervisor 仅保留角色占位，未接入多 Agent 编排
 - SSE 覆盖 Run / Step / Tool 事件流；LLM 输出为一次性返回（无 token 级流式）
-- 去重基于 PostgreSQL 指纹；RabbitMQ 无消费重试；Redis 仅作为基础设施提供，未接入主流程
+- 去重基于 PostgreSQL 指纹；Redis 仅作为基础设施提供，未接入主流程
 - `deploy/k8s` 为空占位，目前仅提供 Docker Compose 部署
 
 ## 快速开始

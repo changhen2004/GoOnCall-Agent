@@ -1796,7 +1796,7 @@ GoOnCall
 ### 工程
 
 - [ ] Redis 幂等。
-- [ ] RabbitMQ 重试。
+- [x] RabbitMQ 重试（重试队列最多 3 次 + DLQ）。
 - [ ] Tool timeout。
 - [ ] Tool audit。
 - [ ] Prometheus metrics。
