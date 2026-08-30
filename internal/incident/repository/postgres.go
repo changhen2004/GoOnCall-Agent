@@ -78,6 +78,25 @@ func (p *Postgres) List(ctx context.Context, filter ListFilter) ([]*model.Incide
 	return out, nil
 }
 
+// Update 以乐观锁（version CAS）更新 Incident：
+// 仅当数据库中 version 与传入值一致时更新（version 自增 1），
+// 否则返回 ErrConcurrentModification（RowsAffected == 0）。
 func (p *Postgres) Update(ctx context.Context, inc *model.Incident) error {
-	return p.db.WithContext(ctx).Save(inc).Error
+	res := p.db.WithContext(ctx).
+		Model(&model.Incident{}).
+		Where("id = ? AND version = ?", inc.ID, inc.Version).
+		Updates(map[string]any{
+			"status":      inc.Status,
+			"resolved_at": inc.ResolvedAt,
+			"updated_at":  inc.UpdatedAt,
+			"version":     gorm.Expr("version + 1"),
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrConcurrentModification
+	}
+	inc.Version++
+	return nil
 }

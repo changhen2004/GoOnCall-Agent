@@ -59,6 +59,8 @@ type Incident struct {
 	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt   time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+	// Version 乐观锁版本号：更新时 CAS（WHERE version = ?），冲突由 RowsAffected == 0 判定。
+	Version int64 `json:"version" gorm:"not null;default:0"`
 }
 
 // TableName 指定 GORM 表名。

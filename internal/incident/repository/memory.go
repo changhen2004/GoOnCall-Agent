@@ -83,12 +83,20 @@ func (m *Memory) List(_ context.Context, filter ListFilter) ([]*model.Incident, 
 	return out, nil
 }
 
+// Update 以乐观锁（version CAS）更新 Incident：
+// 仅当存储中 version 与传入值一致时更新（version 自增 1），
+// 否则返回 ErrConcurrentModification。
 func (m *Memory) Update(_ context.Context, inc *model.Incident) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.items[inc.ID]; !ok {
+	cur, ok := m.items[inc.ID]
+	if !ok {
 		return ErrNotFound
 	}
+	if cur.Version != inc.Version {
+		return ErrConcurrentModification
+	}
+	inc.Version++
 	cp := *inc
 	m.items[inc.ID] = &cp
 	return nil

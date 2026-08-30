@@ -14,6 +14,9 @@ var ErrNotFound = errors.New("incident not found")
 // ErrConflict 表示记录已存在（例如去重冲突）。
 var ErrConflict = errors.New("incident already exists")
 
+// ErrConcurrentModification 表示并发修改冲突（乐观锁 version CAS 失败）。
+var ErrConcurrentModification = errors.New("state changed concurrently")
+
 // ListFilter 是列表查询的过滤与分页条件。
 type ListFilter struct {
 	Service string

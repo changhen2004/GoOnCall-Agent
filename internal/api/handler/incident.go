@@ -164,7 +164,8 @@ func respondError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, dto.ErrorResponse{Error: err.Error()})
 	case errors.Is(err, incidentservice.ErrNotFound):
 		c.JSON(http.StatusNotFound, dto.ErrorResponse{Error: err.Error()})
-	case errors.Is(err, incidentservice.ErrInvalidTransition):
+	case errors.Is(err, incidentservice.ErrInvalidTransition),
+		errors.Is(err, incidentservice.ErrConcurrentModification):
 		c.JSON(http.StatusConflict, dto.ErrorResponse{Error: err.Error()})
 	default:
 		c.JSON(http.StatusInternalServerError, dto.ErrorResponse{Error: err.Error()})

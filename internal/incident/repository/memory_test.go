@@ -147,3 +147,46 @@ func TestMemory_UpdateNotFound(t *testing.T) {
 		t.Fatalf("Update(missing) error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestMemory_UpdateConcurrentModification(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemory()
+	if err := repo.Create(ctx, newTestIncident("inc_1", "svc-a", "OPEN")); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// 两个"并发"快照读到同一版本
+	a, _ := repo.GetByID(ctx, "inc_1")
+	b, _ := repo.GetByID(ctx, "inc_1")
+	if a.Version != 0 || b.Version != 0 {
+		t.Fatalf("initial versions = %d/%d, want 0", a.Version, b.Version)
+	}
+	a.Status = model.StatusInvestigating
+	b.Status = model.StatusMitigating
+
+	// 第一个更新成功，version 0 -> 1
+	if err := repo.Update(ctx, a); err != nil {
+		t.Fatalf("first Update() error = %v", err)
+	}
+	if a.Version != 1 {
+		t.Fatalf("version after first update = %d, want 1", a.Version)
+	}
+
+	// 第二个用旧版本更新 -> 并发冲突
+	if err := repo.Update(ctx, b); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("second Update() error = %v, want ErrConcurrentModification", err)
+	}
+
+	// 重新读取后版本一致，可再次更新
+	cur, _ := repo.GetByID(ctx, "inc_1")
+	if cur.Version != 1 {
+		t.Fatalf("stored version = %d, want 1", cur.Version)
+	}
+	cur.Status = model.StatusVerifying
+	if err := repo.Update(ctx, cur); err != nil {
+		t.Fatalf("Update() after refresh error = %v", err)
+	}
+	if cur.Version != 2 {
+		t.Fatalf("version after refresh update = %d, want 2", cur.Version)
+	}
+}

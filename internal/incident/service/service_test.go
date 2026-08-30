@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"gooncall-agent/internal/incident/model"
@@ -156,5 +157,83 @@ func TestList_DelegatesToRepository(t *testing.T) {
 	}
 	if len(list) != 2 {
 		t.Fatalf("List() len = %d, want 2", len(list))
+	}
+}
+
+// barrierRepo 在 GetByID 处设置屏障：两个并发调用都读取到同一版本快照后再放行，
+// 从而确定性触发乐观锁冲突（先读后写窗口被强制拉开）。
+type barrierRepo struct {
+	repository.Repository
+	mu      sync.Mutex
+	hits    int
+	barrier chan struct{}
+}
+
+func (b *barrierRepo) GetByID(ctx context.Context, id string) (*model.Incident, error) {
+	inc, err := b.Repository.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.hits++
+	if b.hits == 2 {
+		close(b.barrier)
+		b.barrier = nil
+	}
+	wait := b.barrier
+	b.mu.Unlock()
+	if wait != nil {
+		<-wait
+	}
+	return inc, nil
+}
+
+func TestTransition_ConcurrentModification(t *testing.T) {
+	br := &barrierRepo{Repository: repository.NewMemory(), barrier: make(chan struct{})}
+	svc := New(br)
+
+	inc, created, err := svc.Create(context.Background(), CreateIncidentInput{Service: "svc-a", Title: "t"})
+	if err != nil || !created {
+		t.Fatalf("Create() = %v, %v", inc, err)
+	}
+
+	// 两个请求同时把 OPEN -> INVESTIGATING：一个成功，另一个 version CAS 冲突。
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.Transition(context.Background(), inc.ID, model.StatusInvestigating)
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var okCount, conflictCount int
+	for err := range errs {
+		switch {
+		case err == nil:
+			okCount++
+		case errors.Is(err, ErrConcurrentModification):
+			conflictCount++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if okCount != 1 || conflictCount != 1 {
+		t.Fatalf("ok = %d, conflict = %d, want 1/1", okCount, conflictCount)
+	}
+
+	got, err := svc.Get(context.Background(), inc.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Status != model.StatusInvestigating || got.Version != 1 {
+		t.Fatalf("final incident = %s v%d, want INVESTIGATING v1", got.Status, got.Version)
 	}
 }

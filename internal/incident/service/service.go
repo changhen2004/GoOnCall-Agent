@@ -22,6 +22,8 @@ var (
 	ErrNotFound = repository.ErrNotFound
 	// ErrInvalidTransition 表示非法状态迁移。
 	ErrInvalidTransition = errors.New("invalid incident transition")
+	// ErrConcurrentModification 表示并发状态迁移冲突（乐观锁 version CAS 失败）。
+	ErrConcurrentModification = repository.ErrConcurrentModification
 )
 
 // Service 是 Incident 业务服务。
@@ -141,6 +143,9 @@ func (s *Service) Transition(ctx context.Context, id string, to model.Status) (*
 	}
 
 	if err := s.repo.Update(ctx, inc); err != nil {
+		if errors.Is(err, repository.ErrConcurrentModification) {
+			return nil, fmt.Errorf("%w: incident %s", ErrConcurrentModification, id)
+		}
 		return nil, err
 	}
 	return inc, nil
