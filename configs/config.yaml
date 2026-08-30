@@ -30,6 +30,10 @@ prometheus:
 qdrant:
   url: ${QDRANT_URL}
   collection: gooncall_knowledge
+  dim: 1536
+
+vector_store:
+  provider: memory
 
 agent:
   max_steps: 15

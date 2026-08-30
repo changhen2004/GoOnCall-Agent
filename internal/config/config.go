@@ -22,6 +22,7 @@ type Config struct {
 	Agent        AgentConfig        `yaml:"agent"`
 	Approval     ApprovalConfig     `yaml:"approval"`
 	Verification VerificationConfig `yaml:"verification"`
+	VectorStore  VectorStoreConfig  `yaml:"vector_store"`
 }
 
 // ServerConfig 是 HTTP 服务配置。
@@ -68,6 +69,7 @@ type PrometheusConfig struct {
 type QdrantConfig struct {
 	URL        string `yaml:"url"`
 	Collection string `yaml:"collection"`
+	Dim        uint64 `yaml:"dim"`
 }
 
 // AgentConfig 是 Agent 运行时约束配置。
@@ -87,6 +89,11 @@ type VerificationConfig struct {
 	Mode string `yaml:"mode"`
 }
 
+// VectorStoreConfig 是向量存储配置。
+type VectorStoreConfig struct {
+	Provider string `yaml:"provider"`
+}
+
 // Default 返回带安全默认值的配置。
 func Default() *Config {
 	return &Config{
@@ -100,6 +107,7 @@ func Default() *Config {
 		},
 		Qdrant: QdrantConfig{
 			Collection: "gooncall_knowledge",
+			Dim:        1536,
 		},
 		Agent: AgentConfig{
 			MaxSteps:       15,
@@ -111,6 +119,9 @@ func Default() *Config {
 		},
 		Verification: VerificationConfig{
 			Mode: "mock",
+		},
+		VectorStore: VectorStoreConfig{
+			Provider: "memory",
 		},
 	}
 }

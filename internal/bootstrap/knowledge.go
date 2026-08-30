@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"gooncall-agent/internal/config"
 	"gooncall-agent/internal/knowledge/embedding"
@@ -21,7 +22,11 @@ func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	}
 
 	embedder := embedding.NewOpenAIEmbedder(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
-	store := vectorstore.NewMemory()
+
+	store, err := buildVectorStore(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	ld := loader.New("docs", splitter.New(1000))
 	chunks, err := ld.Load(context.Background())
@@ -39,4 +44,39 @@ func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	}
 	slog.Info("knowledge indexed", "chunks", len(chunks))
 	return h, nil
+}
+
+// buildVectorStore 按配置构建向量存储（memory / qdrant）。
+func buildVectorStore(cfg *config.Config) (vectorstore.VectorStore, error) {
+	switch cfg.VectorStore.Provider {
+	case "qdrant":
+		host := qdrantHost(cfg.Qdrant.URL)
+		qs, err := vectorstore.NewQdrant(host, 6334, cfg.Qdrant.Collection, cfg.Qdrant.Dim)
+		if err != nil {
+			return nil, fmt.Errorf("create qdrant store: %w", err)
+		}
+		if err := qs.EnsureCollection(context.Background()); err != nil {
+			return nil, fmt.Errorf("ensure qdrant collection: %w", err)
+		}
+		slog.Info("vector store: qdrant", "collection", cfg.Qdrant.Collection)
+		return qs, nil
+	default:
+		slog.Info("vector store: memory")
+		return vectorstore.NewMemory(), nil
+	}
+}
+
+// qdrantHost 从 URL 提取主机（去掉 scheme 与端口）。
+func qdrantHost(rawURL string) string {
+	u := rawURL
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.Index(u, "/"); i >= 0 {
+		u = u[:i]
+	}
+	if i := strings.LastIndex(u, ":"); i >= 0 {
+		u = u[:i]
+	}
+	return u
 }
