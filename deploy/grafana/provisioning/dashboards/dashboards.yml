@@ -1,0 +1,12 @@
+# Grafana dashboard provider：自动加载 deploy/grafana/provisioning/dashboards 下的面板。
+apiVersion: 1
+providers:
+  - name: gooncall
+    orgId: 1
+    folder: GoOnCall
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

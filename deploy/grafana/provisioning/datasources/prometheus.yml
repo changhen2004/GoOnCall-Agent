@@ -1,0 +1,13 @@
+# Grafana 数据源：GoOnCall 自身 Prometheus（同 compose 网络，容器名 prometheus）。
+# 注意：Grafana 容器以非 root 运行，本目录文件需保持 644 权限（chmod -R 644）。
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s

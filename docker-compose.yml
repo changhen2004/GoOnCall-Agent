@@ -63,6 +63,8 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
+      # provisioning：数据源（Prometheus）与 GoOnCall 概览面板自动加载。
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
 
   alertmanager:
