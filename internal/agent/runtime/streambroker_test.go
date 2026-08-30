@@ -10,7 +10,7 @@ func TestStreamBroker_PublishAndSubscribe(t *testing.T) {
 	ch, cancel := b.Subscribe("run_1")
 	defer cancel()
 
-	b.Publish("run_1", StreamEvent{Type: "tool.started", Data: map[string]any{"tool": "prometheus.query"}})
+	b.Publish("run_1", StreamEvent{Type: "tool.started", Data: map[string]any{"tool": "prometheus_query"}})
 
 	select {
 	case ev := <-ch:

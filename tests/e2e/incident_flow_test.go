@@ -40,7 +40,7 @@ func (f *fakeModel) Generate(_ context.Context, input []*schema.Message, _ ...mo
 	return &schema.Message{
 		Role: schema.Assistant,
 		ToolCalls: []schema.ToolCall{
-			{ID: "call_1", Type: "function", Function: schema.FunctionCall{Name: "runbook.search", Arguments: `{"query":"rabbitmq consumer"}`}},
+			{ID: "call_1", Type: "function", Function: schema.FunctionCall{Name: "runbook_search", Arguments: `{"query":"rabbitmq consumer"}`}},
 		},
 	}, nil
 }

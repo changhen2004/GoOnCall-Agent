@@ -28,7 +28,7 @@ func TestRuntime_DiagnoseRecordsRunAndEvents(t *testing.T) {
 	_ = reg.Register(einoRunbook, registry.RiskLow)
 
 	fake := &fakeModel{
-		toolName:    "runbook.search",
+		toolName:    "runbook_search",
 		toolArgs:    `{"query":"rabbitmq"}`,
 		finalAnswer: "根因：消费者异常",
 	}
@@ -63,7 +63,7 @@ func TestRuntime_DiagnoseRecordsRunAndEvents(t *testing.T) {
 
 	// ToolCall 记录
 	calls, _ := runRepo.ListToolCalls(context.Background(), result.RunID)
-	if len(calls) != 1 || calls[0].ToolName != "runbook.search" {
+	if len(calls) != 1 || calls[0].ToolName != "runbook_search" {
 		t.Fatalf("tool calls = %+v", calls)
 	}
 	if calls[0].Status != "COMPLETED" {

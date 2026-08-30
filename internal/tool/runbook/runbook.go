@@ -119,7 +119,7 @@ func (t *Tool) lexicalSearch(query string) ([]SearchResult, error) {
 // EinoTool 返回 Eino 工具表示。
 func (t *Tool) EinoTool() (tool.InvokableTool, error) {
 	return toolutils.InferTool(
-		"runbook.search",
+		"runbook_search",
 		"检索运维 Runbook 知识库，返回与查询最相关的文档片段与相关度评分。用于查找已知故障的处理步骤。",
 		t.search,
 	)

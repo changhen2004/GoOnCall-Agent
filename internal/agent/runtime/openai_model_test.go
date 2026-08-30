@@ -54,7 +54,7 @@ func TestGenerate_TextResponse(t *testing.T) {
 
 func TestGenerate_ToolCallResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"prometheus.query","arguments":"{\"query\":\"up\"}"}}]},"finish_reason":"tool_calls"}]}`))
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"prometheus_query","arguments":"{\"query\":\"up\"}"}}]},"finish_reason":"tool_calls"}]}`))
 	}))
 	defer server.Close()
 
@@ -67,7 +67,7 @@ func TestGenerate_ToolCallResponse(t *testing.T) {
 		t.Fatalf("tool calls = %d, want 1", len(msg.ToolCalls))
 	}
 	tc := msg.ToolCalls[0]
-	if tc.Function.Name != "prometheus.query" || tc.Function.Arguments != `{"query":"up"}` {
+	if tc.Function.Name != "prometheus_query" || tc.Function.Arguments != `{"query":"up"}` {
 		t.Fatalf("tool call = %+v", tc)
 	}
 }

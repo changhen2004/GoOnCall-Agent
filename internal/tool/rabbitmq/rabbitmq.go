@@ -77,7 +77,7 @@ func (t *Tool) inspect(ctx context.Context, in InspectInput) (map[string]any, er
 // EinoTool 返回 Eino 工具表示。
 func (t *Tool) EinoTool() (tool.InvokableTool, error) {
 	return toolutils.InferTool(
-		"rabbitmq.inspect",
+		"rabbitmq_inspect",
 		"检查 RabbitMQ 队列状态，返回消息积压数、消费者数量、消息速率等。用于验证消费者异常、消息积压等假设。",
 		t.inspect,
 	)

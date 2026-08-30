@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/flow/agent/react"
-
 	"gooncall-agent/internal/agent/diagnosis"
 	incidentmodel "gooncall-agent/internal/incident/model"
 	"gooncall-agent/internal/incident/repository"
@@ -89,8 +87,16 @@ func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, sy
 		}
 	}
 
+	// 先取工具（含记录包装），再构建 Agent —— 工具必须经 ToolsConfig 在
+	// Build 时绑定到模型，否则 LLM 请求中不包含工具定义（见 diagnosis.Build 注释）。
+	tools := rt.registry.EinoTools()
+	if rec != nil {
+		tools = wrapTools(rt.registry, rec, rt.toolTimeout)
+		ctx = WithRunID(ctx, rec.RunID())
+	}
+
 	agent := diagnosis.New(rt.chatModel, rt.maxSteps)
-	reActAgent, err := agent.Build(ctx)
+	reActAgent, err := agent.Build(ctx, tools)
 	if err != nil {
 		if rec != nil {
 			rec.Fail(ctx, err)
@@ -100,21 +106,7 @@ func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, sy
 
 	messages := diagnosis.BuildMessages(systemPrompt, inc)
 
-	tools := rt.registry.EinoTools()
-	if rec != nil {
-		tools = wrapTools(rt.registry, rec, rt.toolTimeout)
-		ctx = WithRunID(ctx, rec.RunID())
-	}
-
-	opts, err := react.WithTools(ctx, tools...)
-	if err != nil {
-		if rec != nil {
-			rec.Fail(ctx, err)
-		}
-		return nil, fmt.Errorf("bind tools: %w", err)
-	}
-
-	result, err := reActAgent.Generate(ctx, messages, opts...)
+	result, err := reActAgent.Generate(ctx, messages)
 	if err != nil {
 		if rec != nil {
 			rec.Fail(ctx, err)

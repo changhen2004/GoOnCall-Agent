@@ -73,7 +73,7 @@ func (t *Tool) search(ctx context.Context, in HistoryInput) ([]HistoryResult, er
 // EinoTool 返回 Eino 工具表示。
 func (t *Tool) EinoTool() (tool.InvokableTool, error) {
 	return toolutils.InferTool(
-		"incident.history",
+		"incident_history",
 		"检索同服务、同告警或同状态的历史 Incident，用于参考历史根因与处理方式。",
 		t.search,
 	)

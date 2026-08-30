@@ -71,7 +71,7 @@ func TestRuntime_DiagnoseRunsReActLoop(t *testing.T) {
 
 	// 脚本化模型：先调 runbook.search，再给结论
 	fake := &fakeModel{
-		toolName:    "runbook.search",
+		toolName:    "runbook_search",
 		toolArgs:    `{"query":"rabbitmq consumer"}`,
 		finalAnswer: "根因：RabbitMQ 消费者连接异常（置信度 0.9）",
 	}

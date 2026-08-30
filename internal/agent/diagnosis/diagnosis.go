@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 
@@ -24,10 +26,18 @@ func New(m model.ToolCallingChatModel, maxSteps int) *Agent {
 }
 
 // Build 构建 ReAct Agent。
-func (a *Agent) Build(ctx context.Context) (*react.Agent, error) {
+//
+// 注意：工具必须在这里放入 ToolsConfig —— react.NewAgent 在构建时用
+// ToolsConfig 生成 ToolInfo 并通过 model.WithTools 绑定到模型；如果只在
+// Generate 时传 react.WithTools，LLM 请求中不会包含工具定义，模型会误以为
+// 没有任何工具可用（表现为拒绝调用工具的纯文本回复）。
+func (a *Agent) Build(ctx context.Context, tools []tool.BaseTool) (*react.Agent, error) {
 	return react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: a.model,
 		MaxStep:          a.maxSteps,
+		ToolsConfig: compose.ToolsNodeConfig{
+			Tools: tools,
+		},
 	})
 }
 

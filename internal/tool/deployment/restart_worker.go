@@ -88,7 +88,7 @@ func (t *Tool) Execute(_ context.Context, action, arguments string) (string, err
 // EinoTool 返回 Eino 工具表示。
 func (t *Tool) EinoTool() (tool.InvokableTool, error) {
 	return toolutils.InferTool(
-		"worker.restart",
+		"worker_restart",
 		"重启指定 worker 部署以恢复消费者。MEDIUM 风险，执行前需要人工审批。",
 		t.request,
 	)

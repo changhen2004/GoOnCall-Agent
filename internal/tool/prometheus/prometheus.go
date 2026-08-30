@@ -76,7 +76,7 @@ func (t *Tool) query(ctx context.Context, in QueryInput) (map[string]any, error)
 // EinoTool 返回 Eino 工具表示。
 func (t *Tool) EinoTool() (tool.InvokableTool, error) {
 	return toolutils.InferTool(
-		"prometheus.query",
+		"prometheus_query",
 		"执行 PromQL 即时查询，返回监控指标时间序列。用于验证错误率、延迟、CPU、内存、队列深度等监控假设。",
 		t.query,
 	)
