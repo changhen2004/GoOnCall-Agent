@@ -21,16 +21,20 @@ import (
 type Tool struct {
 	docsDir   string
 	retriever retriever.Retriever
+	topK      int
 }
 
 // New 创建词法检索工具，docsDir 为文档根目录。
 func New(docsDir string) *Tool {
-	return &Tool{docsDir: docsDir}
+	return &Tool{docsDir: docsDir, topK: 5}
 }
 
-// NewWithRetriever 创建基于混合检索（词法 + 向量）的工具。
-func NewWithRetriever(r retriever.Retriever) *Tool {
-	return &Tool{retriever: r}
+// NewWithRetriever 创建基于混合检索（词法 + 向量）的工具，topK 为最终返回条数。
+func NewWithRetriever(r retriever.Retriever, topK int) *Tool {
+	if topK <= 0 {
+		topK = 5
+	}
+	return &Tool{retriever: r, topK: topK}
 }
 
 // SearchInput 是检索入参。
@@ -53,7 +57,7 @@ type scoredDoc struct {
 
 func (t *Tool) search(ctx context.Context, in SearchInput) ([]SearchResult, error) {
 	if t.retriever != nil {
-		results, err := t.retriever.Retrieve(ctx, in.Query, 5)
+		results, err := t.retriever.Retrieve(ctx, in.Query, t.topK)
 		if err != nil {
 			return nil, err
 		}
@@ -101,8 +105,8 @@ func (t *Tool) lexicalSearch(query string) ([]SearchResult, error) {
 	}
 
 	sort.Slice(docs, func(i, j int) bool { return docs[i].score > docs[j].score })
-	if len(docs) > 5 {
-		docs = docs[:5]
+	if len(docs) > t.topK {
+		docs = docs[:t.topK]
 	}
 
 	out := make([]SearchResult, 0, len(docs))

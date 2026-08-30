@@ -28,15 +28,20 @@ type Retriever interface {
 
 // Hybrid 是混合检索器（词法 + 向量，RRF 融合）。
 type Hybrid struct {
-	chunks   []*kmodel.Chunk
-	embedder embedding.Embedder
-	vector   vectorstore.VectorStore
-	rrfK     int
+	chunks     []*kmodel.Chunk
+	embedder   embedding.Embedder
+	vector     vectorstore.VectorStore
+	rrfK       int
+	candidateK int // 向量检索候选集大小（远小于全量 chunks）
 }
 
-// NewHybrid 创建混合检索器。
-func NewHybrid(chunks []*kmodel.Chunk, embedder embedding.Embedder, vector vectorstore.VectorStore) *Hybrid {
-	return &Hybrid{chunks: chunks, embedder: embedder, vector: vector, rrfK: 60}
+// NewHybrid 创建混合检索器。candidateK 为向量检索候选集大小，
+// 应显著小于 chunks 总量（默认 20），避免每次查询按全量 chunks 做向量 topK。
+func NewHybrid(chunks []*kmodel.Chunk, embedder embedding.Embedder, vector vectorstore.VectorStore, candidateK int) *Hybrid {
+	if candidateK <= 0 {
+		candidateK = 20
+	}
+	return &Hybrid{chunks: chunks, embedder: embedder, vector: vector, rrfK: 60, candidateK: candidateK}
 }
 
 // Index 向量化所有 chunks 并写入向量存储。
@@ -68,7 +73,12 @@ func (h *Hybrid) Retrieve(ctx context.Context, query string, topK int) ([]Result
 	for id, r := range lexicalRanks(query, h.chunks) {
 		ranks[id] = append(ranks[id], r)
 	}
-	vr, err := h.vectorRanks(ctx, query)
+	// 向量检索候选集至少覆盖请求的 topK，避免 RRF 后结果不足。
+	k := h.candidateK
+	if k < topK {
+		k = topK
+	}
+	vr, err := h.vectorRanks(ctx, query, k)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +128,8 @@ func (r Result) ToEvidence(runID string) *incidentmodel.Evidence {
 	}
 }
 
-// vectorRanks 向量检索并转为 1-based 排名。
-func (h *Hybrid) vectorRanks(ctx context.Context, query string) (map[string]int, error) {
+// vectorRanks 向量检索（候选集大小 k，而非全量 chunks）并转为 1-based 排名。
+func (h *Hybrid) vectorRanks(ctx context.Context, query string, k int) (map[string]int, error) {
 	vecs, err := h.embedder.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, err
@@ -127,7 +137,7 @@ func (h *Hybrid) vectorRanks(ctx context.Context, query string) (map[string]int,
 	if len(vecs) == 0 {
 		return map[string]int{}, nil
 	}
-	results, err := h.vector.Search(ctx, vecs[0], len(h.chunks))
+	results, err := h.vector.Search(ctx, vecs[0], k)
 	if err != nil {
 		return nil, err
 	}

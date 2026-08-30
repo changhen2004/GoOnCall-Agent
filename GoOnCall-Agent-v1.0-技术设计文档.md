@@ -750,12 +750,15 @@ v1.0：
 ```text
 Lexical Search
       +
-Vector Search
+Vector Search（候选集 CandidateK，如 20，而非全量 chunks）
       ↓
 RRF Fusion
       ↓
-TopK
+TopK（如 8，由 rag.top_k 配置）
 ```
+
+向量检索候选集大小由 `rag.candidate_k` 配置（默认 20），远小于知识库 chunk 总量，
+避免每次查询都按整个知识库做向量 topK；最终返回条数由 `rag.top_k` 配置（默认 8）。
 
 v1.1 再加入 Reranker。
 
@@ -1540,6 +1543,10 @@ prometheus:
 qdrant:
   url: ${QDRANT_URL}
   collection: gooncall_knowledge
+
+rag:
+  top_k: 8
+  candidate_k: 20
 
 agent:
   max_steps: 15

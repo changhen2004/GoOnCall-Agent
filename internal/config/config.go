@@ -19,6 +19,7 @@ type Config struct {
 	RabbitMQ     RabbitMQConfig     `yaml:"rabbitmq"`
 	Prometheus   PrometheusConfig   `yaml:"prometheus"`
 	Qdrant       QdrantConfig       `yaml:"qdrant"`
+	RAG          RAGConfig          `yaml:"rag"`
 	Agent        AgentConfig        `yaml:"agent"`
 	Approval     ApprovalConfig     `yaml:"approval"`
 	Verification VerificationConfig `yaml:"verification"`
@@ -73,6 +74,15 @@ type QdrantConfig struct {
 	Dim        uint64 `yaml:"dim"`
 }
 
+// RAGConfig 是 RAG 混合检索配置。
+type RAGConfig struct {
+	// TopK 最终返回的结果条数（默认 8）。
+	TopK int `yaml:"top_k"`
+	// CandidateK 向量检索的候选集大小（默认 20）。
+	// 远小于全量 chunks，避免每次查询都按整个知识库做向量 topK。
+	CandidateK int `yaml:"candidate_k"`
+}
+
 // AgentConfig 是 Agent 运行时约束配置。
 type AgentConfig struct {
 	MaxSteps       int `yaml:"max_steps"`
@@ -114,6 +124,10 @@ func Default() *Config {
 		Qdrant: QdrantConfig{
 			Collection: "gooncall_knowledge",
 			Dim:        1536,
+		},
+		RAG: RAGConfig{
+			TopK:       8,
+			CandidateK: 20,
 		},
 		Agent: AgentConfig{
 			MaxSteps:       15,

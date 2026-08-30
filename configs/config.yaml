@@ -35,6 +35,12 @@ qdrant:
 vector_store:
   provider: memory
 
+# RAG 混合检索。candidate_k 为向量检索候选集大小，远小于知识库 chunk 总量，
+# 避免每次查询按全量 chunks 做向量 topK（chunk 数量大时显著影响性能）。
+rag:
+  top_k: 8
+  candidate_k: 20
+
 agent:
   max_steps: 15
   max_tool_calls: 20

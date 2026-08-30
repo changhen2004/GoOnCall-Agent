@@ -21,7 +21,7 @@ func buildToolRegistry(cfg *config.Config, repo repository.Repository, rag retri
 
 	var runbookTool *runbook.Tool
 	if rag != nil {
-		runbookTool = runbook.NewWithRetriever(rag)
+		runbookTool = runbook.NewWithRetriever(rag, cfg.RAG.TopK)
 	} else {
 		runbookTool = runbook.New("docs")
 	}

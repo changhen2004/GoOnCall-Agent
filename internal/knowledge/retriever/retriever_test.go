@@ -2,6 +2,7 @@ package retriever
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	incidentmodel "gooncall-agent/internal/incident/model"
@@ -37,7 +38,7 @@ func TestHybridRetrieve(t *testing.T) {
 	}}
 	store := vectorstore.NewMemory()
 
-	h := NewHybrid(chunks, embedder, store)
+	h := NewHybrid(chunks, embedder, store, 20)
 	if err := h.Index(context.Background()); err != nil {
 		t.Fatalf("Index() error = %v", err)
 	}
@@ -63,7 +64,7 @@ func TestHybridRetrieve_TopK(t *testing.T) {
 	embedder := &fakeEmbedder{vectors: map[string][]float32{
 		"aaa bbb": {1, 0}, "aaa ccc": {1, 0}, "ddd eee": {0, 1}, "aaa": {1, 0},
 	}}
-	h := NewHybrid(chunks, embedder, vectorstore.NewMemory())
+	h := NewHybrid(chunks, embedder, vectorstore.NewMemory(), 20)
 	_ = h.Index(context.Background())
 
 	results, _ := h.Retrieve(context.Background(), "aaa", 2)
@@ -78,6 +79,54 @@ func TestRRFScores(t *testing.T) {
 	// a: 1/61 + 1/63 ≈ 0.0323; b: 1/62 + 1/61 ≈ 0.0325 → b > a
 	if scores["b"] <= scores["a"] {
 		t.Fatalf("b should outrank a: %v", scores)
+	}
+}
+
+// recordingStore 记录每次 Search 的 topK，用于断言向量检索候选集被限制。
+type recordingStore struct {
+	mem   *vectorstore.Memory
+	lastK int
+}
+
+func (r *recordingStore) Upsert(ctx context.Context, points []vectorstore.Point) error {
+	return r.mem.Upsert(ctx, points)
+}
+
+func (r *recordingStore) Search(ctx context.Context, vector []float32, topK int) ([]vectorstore.SearchResult, error) {
+	r.lastK = topK
+	return r.mem.Search(ctx, vector, topK)
+}
+
+func TestVectorSearchCandidateK(t *testing.T) {
+	chunks := make([]*kmodel.Chunk, 0, 20)
+	vectors := make(map[string][]float32, 20)
+	for i := 0; i < 20; i++ {
+		content := fmt.Sprintf("content %d", i)
+		chunks = append(chunks, &kmodel.Chunk{ID: fmt.Sprintf("c%d", i), Content: content})
+		vectors[content] = []float32{float32(i), 0}
+	}
+	embedder := &fakeEmbedder{vectors: vectors}
+
+	// candidateK=5，知识库 20 个 chunk：向量检索 topK 必须是 5，而不是 len(chunks)=20。
+	store := &recordingStore{mem: vectorstore.NewMemory()}
+	h := NewHybrid(chunks, embedder, store, 5)
+	if err := h.Index(context.Background()); err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+	if _, err := h.Retrieve(context.Background(), "content 19", 3); err != nil {
+		t.Fatalf("Retrieve() error = %v", err)
+	}
+	if store.lastK != 5 {
+		t.Fatalf("vector Search topK = %d, want candidateK 5 (not len(chunks)=20)", store.lastK)
+	}
+
+	// 请求 topK 超过 candidateK 时，候选集至少覆盖请求条数。
+	store.lastK = 0
+	if _, err := h.Retrieve(context.Background(), "content 19", 8); err != nil {
+		t.Fatalf("Retrieve() error = %v", err)
+	}
+	if store.lastK != 8 {
+		t.Fatalf("vector Search topK = %d, want max(candidateK, topK)=8", store.lastK)
 	}
 }
 

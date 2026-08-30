@@ -38,7 +38,7 @@ func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
 		return nil, nil
 	}
 
-	h := retriever.NewHybrid(chunks, embedder, store)
+	h := retriever.NewHybrid(chunks, embedder, store, cfg.RAG.CandidateK)
 	if err := h.Index(context.Background()); err != nil {
 		return nil, fmt.Errorf("index knowledge: %w", err)
 	}
