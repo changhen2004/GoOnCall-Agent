@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: gooncall
       POSTGRES_DB: gooncall
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d:ro
@@ -19,7 +19,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -32,8 +32,8 @@ services:
       RABBITMQ_DEFAULT_USER: gooncall
       RABBITMQ_DEFAULT_PASS: gooncall
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
@@ -44,26 +44,41 @@ services:
     # 固定版本，避免 latest 未来 breaking change（当前：2026-08）
     image: qdrant/qdrant:v1.19.0
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
 
   prometheus:
     image: prom/prometheus:v3.12.0
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
   grafana:
     image: grafana/grafana:13.2.0
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
     volumes:
       - grafana_data:/var/lib/grafana
+
+  alertmanager:
+    # 告警链路：Prometheus（业务规则）-> Alertmanager -> webhook -> GoOnCall API
+    # webhook URL 在 deploy/alertmanager/alertmanager.yml 中硬编码（Alertmanager 不支持
+    # 配置内 ${VAR} 插值）；API 在宿主机运行（go run ./cmd/api）时，把该 URL 改为
+    # http://host.docker.internal:8082/api/v1/alerts 并依赖下方 extra_hosts。
+    image: prom/alertmanager:v0.34.0
+    ports:
+      - "${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
 
   gooncall-api:
     build:
@@ -79,10 +94,19 @@ services:
       RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
       RABBITMQ_USERNAME: gooncall
       RABBITMQ_PASSWORD: gooncall
-      PROMETHEUS_URL: http://prometheus:9090
-      QDRANT_URL: http://qdrant:6333
+      # Agent 的 Prometheus 工具与验证采集器指向的业务 Prometheus。
+      # 本地联调可覆盖为宿主 GoCommunity 的 Prometheus：PROMETHEUS_URL=http://host.docker.internal:9091
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      # LLM 配置（为空则不装配诊断 Agent，analyze 仅做状态流转）。
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "8080:8080"
+      - "${GOONCALL_API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -98,7 +122,18 @@ services:
       POSTGRES_DSN: postgres://gooncall:gooncall@postgres:5432/gooncall?sslmode=disable
       REDIS_ADDR: redis:6379
       RABBITMQ_URL: amqp://gooncall:gooncall@rabbitmq:5672/
+      # Worker 运行诊断 Agent，需要 Prometheus 工具（查询/告警/范围查询）。
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+      # LLM 配置（为空则不装配诊断 Agent，仅做状态流转）。
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
+      postgres:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
 

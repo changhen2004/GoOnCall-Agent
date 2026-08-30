@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # GoOnCall Agent v1.0 端到端 Demo
-# 用法: BASE_URL=http://127.0.0.1:8080 ./scripts/demo.sh
+# 用法: BASE_URL=http://127.0.0.1:8082 ./scripts/demo.sh
+# 默认端口 8082：本机 8080 常被 GoCommunity backend 占用，API 需以 SERVER_PORT=8082 启动。
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:8082}"
 
 echo "==> 1. 模拟 GoCommunity Prometheus 告警（Alertmanager webhook）"
 CREATE=$(curl -s -X POST "${BASE_URL}/api/v1/alerts" -H 'Content-Type: application/json' -d '{
