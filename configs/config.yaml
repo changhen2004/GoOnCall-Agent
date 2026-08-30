@@ -41,6 +41,8 @@ rag:
   top_k: 8
   candidate_k: 20
 
+# Agent 运行时约束。timeout_seconds 为整轮诊断超时（覆盖全部步骤与工具调用），
+# 单次工具调用超时由 tool.timeout_seconds 控制。
 agent:
   max_steps: 15
   max_tool_calls: 20

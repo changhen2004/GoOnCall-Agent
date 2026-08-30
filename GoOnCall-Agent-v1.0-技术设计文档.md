@@ -1551,7 +1551,7 @@ rag:
 agent:
   max_steps: 15
   max_tool_calls: 20
-  timeout_seconds: 180
+  timeout_seconds: 180  # 整轮诊断超时（工具单次超时由 tool.timeout_seconds 控制）
 
 approval:
   enabled: true

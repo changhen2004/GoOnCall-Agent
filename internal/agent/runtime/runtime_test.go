@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -101,5 +103,40 @@ func TestRuntime_NewDefaultsMaxSteps(t *testing.T) {
 	rt := New(fake, registry.New(), 0)
 	if rt.maxSteps != 15 {
 		t.Fatalf("maxSteps = %d, want 15", rt.maxSteps)
+	}
+}
+
+// blockingModel 阻塞到 ctx 超时，用于验证整轮诊断超时。
+type blockingModel struct{}
+
+func (blockingModel) Generate(ctx context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (blockingModel) Stream(ctx context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	return nil, context.DeadlineExceeded
+}
+
+func (blockingModel) WithTools(_ []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return blockingModel{}, nil
+}
+
+func TestRuntime_DiagnoseRunTimeout(t *testing.T) {
+	rt := New(blockingModel{}, registry.New(), 15).WithRunTimeout(30 * time.Millisecond)
+	inc := &incidentmodel.Incident{
+		Service:   "gocommunity",
+		Severity:  "HIGH",
+		Title:     "rabbitmq backlog",
+		AlertName: "HighQueueDepth",
+		Status:    incidentmodel.StatusInvestigating,
+	}
+
+	_, err := rt.Diagnose(context.Background(), inc, "你是诊断 agent")
+	if err == nil {
+		t.Fatal("Diagnose() should fail when run timeout expires")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline exceeded", err)
 	}
 }

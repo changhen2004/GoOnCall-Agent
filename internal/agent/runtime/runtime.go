@@ -30,6 +30,7 @@ type Runtime struct {
 	broker       *StreamBroker
 	toolTimeout  time.Duration
 	maxToolCalls int
+	runTimeout   time.Duration
 }
 
 // New 创建 Agent Runtime。
@@ -51,7 +52,7 @@ func (rt *Runtime) WithRunRecording(runRepo repository.RunRepository, broker *St
 	return rt
 }
 
-// WithToolLimits 设置工具执行超时与最大调用次数。
+// WithToolLimits 设置单次工具执行超时与最大调用次数。
 func (rt *Runtime) WithToolLimits(timeout time.Duration, maxToolCalls int) *Runtime {
 	if timeout > 0 {
 		rt.toolTimeout = timeout
@@ -62,9 +63,24 @@ func (rt *Runtime) WithToolLimits(timeout time.Duration, maxToolCalls int) *Runt
 	return rt
 }
 
+// WithRunTimeout 设置整轮诊断的超时（覆盖 Agent 全部步骤与工具调用）。
+func (rt *Runtime) WithRunTimeout(timeout time.Duration) *Runtime {
+	if timeout > 0 {
+		rt.runTimeout = timeout
+	}
+	return rt
+}
+
 // Diagnose 对 Incident 执行诊断：Incident -> Agent -> Tool -> Result。
 // 若启用 Run 记录，则创建 AgentRun 并记录步骤、工具调用与 SSE 事件。
+// 整轮执行受 runTimeout 约束，超时后返回 context deadline exceeded。
 func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, systemPrompt string) (*DiagnosisResult, error) {
+	if rt.runTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, rt.runTimeout)
+		defer cancel()
+	}
+
 	var rec *Recorder
 	if rt.runRepo != nil {
 		rec = NewRecorder(rt.runRepo, rt.broker, inc, "diagnosis", rt.maxToolCalls)

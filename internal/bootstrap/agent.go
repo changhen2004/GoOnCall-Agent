@@ -24,7 +24,8 @@ func buildAgent(cfg *config.Config, reg *registry.Registry, runRepo repository.R
 	chatModel := agentruntime.NewOpenAIChatModel(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model)
 	rt := agentruntime.New(chatModel, reg, cfg.Agent.MaxSteps).
 		WithRunRecording(runRepo, broker).
-		WithToolLimits(time.Duration(cfg.Tool.TimeoutSeconds)*time.Second, cfg.Agent.MaxToolCalls)
+		WithToolLimits(time.Duration(cfg.Tool.TimeoutSeconds)*time.Second, cfg.Agent.MaxToolCalls).
+		WithRunTimeout(time.Duration(cfg.Agent.TimeoutSeconds) * time.Second)
 	prompt := loadPrompt(diagnosisPromptPath)
 	slog.Info("agent runtime enabled", "model", cfg.LLM.Model, "tools", reg.Names())
 	return rt, rt, prompt
