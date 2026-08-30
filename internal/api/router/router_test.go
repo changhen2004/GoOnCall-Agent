@@ -191,14 +191,10 @@ func TestAnalyzeAndResolveFlow(t *testing.T) {
 		t.Fatalf("unexpected diagnosis without agent: %+v", a.Diagnosis)
 	}
 
+	// 严格状态机：INVESTIGATING 直接 RESOLVED 被禁止 -> 409
 	resolved := doRequest(t, r, http.MethodPost, "/api/v1/incidents/"+inc.ID+"/resolve", nil)
-	if resolved.Code != http.StatusOK {
-		t.Fatalf("resolve status = %d", resolved.Code)
-	}
-	var res dto.IncidentResponse
-	_ = json.Unmarshal(resolved.Body.Bytes(), &res)
-	if res.Status != "RESOLVED" || res.ResolvedAt == nil {
-		t.Fatalf("resolve status = %q, resolved_at=%v", res.Status, res.ResolvedAt)
+	if resolved.Code != http.StatusConflict {
+		t.Fatalf("resolve(INVESTIGATING) status = %d, want 409", resolved.Code)
 	}
 }
 
