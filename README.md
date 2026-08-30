@@ -9,7 +9,7 @@
 - **工具集**：Prometheus 指标查询 / RabbitMQ 队列检查 / Runbook 检索 / Incident 历史 / `worker.restart`（模拟重启，MEDIUM 风险，执行前强制人工审批）
 - **RAG 混合检索**：Markdown 加载 → 分块 → Embedding → 内存或 Qdrant 向量库 → 词法 + 向量混合检索（RRF 融合）；向量检索候选集可配置，避免全量扫描；启动时按内容哈希增量索引，未变化的 chunk 跳过重新 embedding
 - **Agent Run 记录**：AgentRun / Step / ToolCall 持久化 + SSE 事件流；`max_steps` / `max_tool_calls` / 整轮诊断超时 + 单次工具超时
-- **HITL 人工审批**：风险策略 → 审批（批准/拒绝）→ 批准后执行处置
+- **HITL 人工审批**：风险策略 → 审批（批准/拒绝）→ 批准后执行；执行状态落库（`APPROVED → EXECUTING → EXECUTED/FAILED`），审批记录与实际执行结果一致，审计链完整
 - **自动处置链路**：审批通过 → 执行 `restart_worker` → 指标验证（Mock / Prometheus 可切换）→ 验证通过自动关闭 Incident 并生成 Postmortem，失败置 FAILED
 - **RabbitMQ 事件驱动**：API 异步发布 `agent.requested`（publisher confirm 确认投递，不可路由即报错），Worker 消费事件并运行诊断 Agent；消费失败自动重试（最多 3 次、间隔 5s），超过后进入死信队列（DLQ），不会无限 requeue
 - **可观测性**：Prometheus 指标 + `/healthz` `/readyz`

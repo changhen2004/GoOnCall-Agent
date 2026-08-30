@@ -2,13 +2,17 @@ package model
 
 import "time"
 
-// ApprovalStatus 是审批状态。
+// ApprovalStatus 是审批状态。审计链：
+// PENDING -> APPROVED -> EXECUTING -> EXECUTED / FAILED；PENDING -> REJECTED。
 type ApprovalStatus string
 
 const (
-	ApprovalPending  ApprovalStatus = "PENDING"
-	ApprovalApproved ApprovalStatus = "APPROVED"
-	ApprovalRejected ApprovalStatus = "REJECTED"
+	ApprovalPending   ApprovalStatus = "PENDING"
+	ApprovalApproved  ApprovalStatus = "APPROVED"
+	ApprovalExecuting ApprovalStatus = "EXECUTING"
+	ApprovalExecuted  ApprovalStatus = "EXECUTED"
+	ApprovalFailed    ApprovalStatus = "FAILED"
+	ApprovalRejected  ApprovalStatus = "REJECTED"
 )
 
 // Approval 是一条人工审批记录（设计文档 5.6）。

@@ -81,7 +81,8 @@ func (s *Service) Request(ctx context.Context, runID, toolCallID, action, argume
 	return a, nil
 }
 
-// Approve 批准审批并执行动作。
+// Approve 批准审批并执行动作，状态链：APPROVED -> EXECUTING -> EXECUTED / FAILED。
+// 执行结果会落库，保证 Approval 记录与真实执行结果一致，审计链完整。
 func (s *Service) Approve(ctx context.Context, id, approvedBy string) (*model.Approval, error) {
 	a, err := s.repo.Get(ctx, id)
 	if err != nil {
@@ -102,13 +103,34 @@ func (s *Service) Approve(ctx context.Context, id, approvedBy string) (*model.Ap
 	s.moveIncident(ctx, a.RunID, model.StatusMitigating)
 	s.publish(a.RunID, "action.approved", map[string]any{"approval_id": a.ID, "action": a.Action})
 
-	if s.executor != nil {
-		result, execErr := s.executor.Execute(ctx, a.Action, a.Arguments, a.RunID)
-		if execErr != nil {
-			s.publish(a.RunID, "action.completed", map[string]any{"approval_id": a.ID, "status": "FAILED", "error": execErr.Error()})
-		} else {
-			s.publish(a.RunID, "action.completed", map[string]any{"approval_id": a.ID, "status": "COMPLETED", "result": result})
+	if s.executor == nil {
+		// 无执行器：无实际执行，状态停留在 APPROVED。
+		return a, nil
+	}
+
+	// EXECUTING：执行前先落库，避免执行期间 Approval 仍显示 APPROVED。
+	a.Status = model.ApprovalExecuting
+	if err := s.repo.Update(ctx, a); err != nil {
+		return nil, err
+	}
+	metrics.ApprovalsTotal.WithLabelValues(a.Action, string(model.ApprovalExecuting)).Inc()
+	s.publish(a.RunID, "action.executing", map[string]any{"approval_id": a.ID, "action": a.Action})
+
+	result, execErr := s.executor.Execute(ctx, a.Action, a.Arguments, a.RunID)
+	if execErr != nil {
+		a.Status = model.ApprovalFailed
+		if err := s.repo.Update(ctx, a); err != nil {
+			return nil, err
 		}
+		metrics.ApprovalsTotal.WithLabelValues(a.Action, string(model.ApprovalFailed)).Inc()
+		s.publish(a.RunID, "action.completed", map[string]any{"approval_id": a.ID, "status": "FAILED", "error": execErr.Error()})
+	} else {
+		a.Status = model.ApprovalExecuted
+		if err := s.repo.Update(ctx, a); err != nil {
+			return nil, err
+		}
+		metrics.ApprovalsTotal.WithLabelValues(a.Action, string(model.ApprovalExecuted)).Inc()
+		s.publish(a.RunID, "action.completed", map[string]any{"approval_id": a.ID, "status": "COMPLETED", "result": result})
 	}
 	return a, nil
 }

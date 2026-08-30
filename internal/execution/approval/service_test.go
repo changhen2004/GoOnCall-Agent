@@ -43,8 +43,11 @@ func TestRequest_ThenApprove_Executes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Approve() error = %v", err)
 	}
-	if got.Status != model.ApprovalApproved || got.ApprovedBy != "admin" {
-		t.Fatalf("approval = %+v", got)
+	if got.Status != model.ApprovalExecuted {
+		t.Fatalf("status = %s, want EXECUTED", got.Status)
+	}
+	if got.ApprovedBy != "admin" {
+		t.Fatalf("approved_by = %q, want admin", got.ApprovedBy)
 	}
 	if !ex.called {
 		t.Fatal("executor should be called on approve")
@@ -53,8 +56,78 @@ func TestRequest_ThenApprove_Executes(t *testing.T) {
 	// 事件
 	ch, cancel := broker.Subscribe("run_1")
 	defer cancel()
-	seen := collectEvents(t, ch, []string{"approval.required", "action.approved", "action.completed"})
+	seen := collectEvents(t, ch, []string{"approval.required", "action.approved", "action.executing", "action.completed"})
 	_ = seen
+}
+
+// recordingApprovalRepo 记录每次 Update 落库的状态，验证审计状态链。
+type recordingApprovalRepo struct {
+	*repository.MemoryApproval
+	statuses []model.ApprovalStatus
+}
+
+func (r *recordingApprovalRepo) Update(ctx context.Context, a *model.Approval) error {
+	if err := r.MemoryApproval.Update(ctx, a); err != nil {
+		return err
+	}
+	r.statuses = append(r.statuses, a.Status)
+	return nil
+}
+
+func TestApprove_StateChain(t *testing.T) {
+	repo := &recordingApprovalRepo{MemoryApproval: repository.NewMemoryApproval()}
+	svc := New(repo, runtime.NewStreamBroker(), &fakeExecutor{result: "ok"})
+
+	a, _ := svc.Request(context.Background(), "run_1", "call_1", "restart_worker", "{}", "r")
+	_, err := svc.Approve(context.Background(), a.ID, "admin")
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+
+	want := []model.ApprovalStatus{
+		model.ApprovalApproved,
+		model.ApprovalExecuting,
+		model.ApprovalExecuted,
+	}
+	if len(repo.statuses) != len(want) {
+		t.Fatalf("persisted states = %v, want %v", repo.statuses, want)
+	}
+	for i, s := range want {
+		if repo.statuses[i] != s {
+			t.Fatalf("persisted states = %v, want %v", repo.statuses, want)
+		}
+	}
+}
+
+func TestApprove_ExecutorFails(t *testing.T) {
+	ex := &fakeExecutor{err: errors.New("restart failed")}
+	svc, _, _ := newService(ex)
+
+	a, _ := svc.Request(context.Background(), "run_1", "call_1", "restart_worker", "{}", "r")
+	got, err := svc.Approve(context.Background(), a.ID, "admin")
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if got.Status != model.ApprovalFailed {
+		t.Fatalf("status = %s, want FAILED", got.Status)
+	}
+	if !ex.called {
+		t.Fatal("executor should be called")
+	}
+}
+
+func TestApprove_NoExecutor(t *testing.T) {
+	svc, _, _ := newService(nil)
+
+	a, _ := svc.Request(context.Background(), "run_1", "call_1", "restart_worker", "{}", "r")
+	got, err := svc.Approve(context.Background(), a.ID, "admin")
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	// 无执行器：无实际执行，状态停留在 APPROVED
+	if got.Status != model.ApprovalApproved {
+		t.Fatalf("status = %s, want APPROVED", got.Status)
+	}
 }
 
 func TestReject(t *testing.T) {
