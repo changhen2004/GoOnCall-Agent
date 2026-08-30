@@ -42,7 +42,6 @@ func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	if err := h.Index(context.Background()); err != nil {
 		return nil, fmt.Errorf("index knowledge: %w", err)
 	}
-	slog.Info("knowledge indexed", "chunks", len(chunks))
 	return h, nil
 }
 

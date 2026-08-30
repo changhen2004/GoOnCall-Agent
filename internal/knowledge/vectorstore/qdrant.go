@@ -85,6 +85,44 @@ func (q *Qdrant) Search(ctx context.Context, vector []float32, topK int) ([]Sear
 	return out, nil
 }
 
+// Hashes 滚动读取全部点的 payload，返回 chunk_id -> chunk_hash。
+// 供启动时增量索引判断哪些 chunk 未变化、可跳过重新 embedding。
+func (q *Qdrant) Hashes(ctx context.Context) (map[string]string, error) {
+	out := make(map[string]string)
+	var offset *qc.PointId
+	limit := uint32(1000)
+	for {
+		points, next, err := q.client.ScrollAndOffset(ctx, &qc.ScrollPoints{
+			CollectionName: q.collection,
+			Limit:          &limit,
+			WithPayload:    qc.NewWithPayload(true),
+			Offset:         offset,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range points {
+			if p.Payload == nil {
+				continue
+			}
+			id, hash := "", ""
+			if v, ok := p.Payload["chunk_id"]; ok && v != nil {
+				id = v.GetStringValue()
+			}
+			if v, ok := p.Payload["chunk_hash"]; ok && v != nil {
+				hash = v.GetStringValue()
+			}
+			if id != "" && hash != "" {
+				out[id] = hash
+			}
+		}
+		if next == nil {
+			return out, nil
+		}
+		offset = next
+	}
+}
+
 // uuidFromString 将任意字符串 ID 稳定映射为 UUID（Qdrant 点 ID 要求 UUID）。
 func uuidFromString(s string) string {
 	h := md5.Sum([]byte(s))

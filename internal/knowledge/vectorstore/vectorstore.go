@@ -26,6 +26,9 @@ type SearchResult struct {
 type VectorStore interface {
 	Upsert(ctx context.Context, points []Point) error
 	Search(ctx context.Context, vector []float32, topK int) ([]SearchResult, error)
+	// Hashes 返回已索引点的 chunk_id -> 内容哈希（payload 中的 chunk_hash）。
+	// 用于启动时增量索引：哈希未变化的 chunk 跳过重新 embedding。
+	Hashes(ctx context.Context) (map[string]string, error)
 }
 
 // Memory 是内存向量存储（余弦相似度），用于单元测试与本地开发。
@@ -68,6 +71,19 @@ func (m *Memory) Search(_ context.Context, vector []float32, topK int) ([]Search
 	out := make([]SearchResult, 0, len(scoredPoints))
 	for _, sp := range scoredPoints {
 		out = append(out, SearchResult{ID: sp.id, Score: sp.score, Payload: m.points[sp.id].Payload})
+	}
+	return out, nil
+}
+
+// Hashes 返回已索引点的 chunk_id -> chunk_hash。
+func (m *Memory) Hashes(_ context.Context) (map[string]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make(map[string]string, len(m.points))
+	for id, p := range m.points {
+		if h, ok := p.Payload["chunk_hash"].(string); ok && h != "" {
+			out[id] = h
+		}
 	}
 	return out, nil
 }

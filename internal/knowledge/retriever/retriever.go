@@ -3,6 +3,9 @@ package retriever
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -44,9 +47,24 @@ func NewHybrid(chunks []*kmodel.Chunk, embedder embedding.Embedder, vector vecto
 	return &Hybrid{chunks: chunks, embedder: embedder, vector: vector, rrfK: 60, candidateK: candidateK}
 }
 
-// Index 向量化所有 chunks 并写入向量存储。
+// Index 增量向量化 chunks 并写入向量存储。
+//
+// 启动时先读取已索引点的内容哈希（chunk_hash），哈希未变化的 chunk
+// 跳过 embedding，避免每次启动都重新 embedding 全量知识库；
+// 仅在文档新增 / 内容变更时对变化的 chunk 做 embedding。
 func (h *Hybrid) Index(ctx context.Context) error {
+	existing, err := h.vector.Hashes(ctx)
+	if err != nil {
+		return err
+	}
+
+	var embedded, skipped int
 	for _, c := range h.chunks {
+		hash := chunkHash(c)
+		if existing[c.ID] == hash {
+			skipped++
+			continue
+		}
 		vecs, err := h.embedder.Embed(ctx, []string{c.Content})
 		if err != nil {
 			return err
@@ -57,10 +75,18 @@ func (h *Hybrid) Index(ctx context.Context) error {
 		_ = h.vector.Upsert(ctx, []vectorstore.Point{{
 			ID:      c.ID,
 			Vector:  vecs[0],
-			Payload: map[string]any{"source": c.Source, "doc_type": c.DocType},
+			Payload: map[string]any{"source": c.Source, "doc_type": c.DocType, "chunk_hash": hash},
 		}})
+		embedded++
 	}
+	slog.Info("knowledge index", "chunks", len(h.chunks), "embedded", embedded, "skipped", skipped)
 	return nil
+}
+
+// chunkHash 计算 chunk 内容的 SHA-256 哈希，作为增量索引的变更指纹。
+func chunkHash(c *kmodel.Chunk) string {
+	sum := sha256.Sum256([]byte(c.Content))
+	return hex.EncodeToString(sum[:])
 }
 
 // Retrieve 执行混合检索，返回 topK 条结果（按融合分数降序）。

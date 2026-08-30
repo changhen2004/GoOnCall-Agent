@@ -26,6 +26,66 @@ func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 	return out, nil
 }
 
+// countingEmbedder 统计 Embedding 调用次数，验证增量索引跳过未变化 chunk。
+type countingEmbedder struct {
+	*fakeEmbedder
+	calls int
+}
+
+func (c *countingEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	c.calls += len(texts)
+	return c.fakeEmbedder.Embed(ctx, texts)
+}
+
+func TestIndexSkipsUnchangedChunks(t *testing.T) {
+	chunks := []*kmodel.Chunk{
+		{ID: "a#0", Content: "aaa bbb"},
+		{ID: "b#0", Content: "ccc ddd"},
+	}
+	embedder := &countingEmbedder{fakeEmbedder: &fakeEmbedder{vectors: map[string][]float32{
+		"aaa bbb": {1, 0},
+		"ccc ddd": {0, 1},
+	}}}
+	h := NewHybrid(chunks, embedder, vectorstore.NewMemory(), 20)
+
+	// 首次索引：全部 embedding
+	if err := h.Index(context.Background()); err != nil {
+		t.Fatalf("first Index() error = %v", err)
+	}
+	if embedder.calls != 2 {
+		t.Fatalf("first index embeds = %d, want 2", embedder.calls)
+	}
+
+	// 再次启动：内容未变化，全部跳过 embedding
+	if err := h.Index(context.Background()); err != nil {
+		t.Fatalf("second Index() error = %v", err)
+	}
+	if embedder.calls != 2 {
+		t.Fatalf("second index embeds = %d, want 0 new (total 2)", embedder.calls)
+	}
+
+	// 修改一个 chunk：只重新 embedding 变化的那一个
+	chunks[1].Content = "ccc ddd changed"
+	if err := h.Index(context.Background()); err != nil {
+		t.Fatalf("third Index() error = %v", err)
+	}
+	if embedder.calls != 3 {
+		t.Fatalf("after change embeds = %d, want 3 (one new)", embedder.calls)
+	}
+}
+
+func TestChunkHash(t *testing.T) {
+	a := &kmodel.Chunk{ID: "x", Content: "hello"}
+	b := &kmodel.Chunk{ID: "y", Content: "hello"}
+	c := &kmodel.Chunk{ID: "x", Content: "hello!"}
+	if chunkHash(a) != chunkHash(b) {
+		t.Fatal("same content should hash the same regardless of id")
+	}
+	if chunkHash(a) == chunkHash(c) {
+		t.Fatal("different content should hash differently")
+	}
+}
+
 func TestHybridRetrieve(t *testing.T) {
 	chunks := []*kmodel.Chunk{
 		{ID: "rabbitmq.md#0", Source: "rabbitmq.md", DocType: "runbook", Title: "消费者异常", Content: "rabbitmq consumer backlog"},
@@ -95,6 +155,10 @@ func (r *recordingStore) Upsert(ctx context.Context, points []vectorstore.Point)
 func (r *recordingStore) Search(ctx context.Context, vector []float32, topK int) ([]vectorstore.SearchResult, error) {
 	r.lastK = topK
 	return r.mem.Search(ctx, vector, topK)
+}
+
+func (r *recordingStore) Hashes(ctx context.Context) (map[string]string, error) {
+	return r.mem.Hashes(ctx)
 }
 
 func TestVectorSearchCandidateK(t *testing.T) {
