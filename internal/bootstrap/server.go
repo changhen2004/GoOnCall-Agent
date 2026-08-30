@@ -15,7 +15,8 @@ func (a *App) buildServer() *gin.Engine {
 		WithPublisher(a)
 	runHandler := handler.NewRunHandler(a.runRepo, a.broker)
 	approvalHandler := handler.NewApprovalHandler(a.approvalSvc)
-	alertHandler := handler.NewAlertHandler(a.incidentSvc)
+	// AlertManager webhook：创建 Incident 后自动发布 agent.requested（全自动诊断链路）。
+	alertHandler := handler.NewAlertHandler(a.incidentSvc).WithPublisher(a)
 
 	engine := router.New(incidentHandler, handler.NewHealthHandler(), runHandler, approvalHandler, alertHandler)
 	engine.GET("/metrics", gin.WrapH(promhttp.Handler()))

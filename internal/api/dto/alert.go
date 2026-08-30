@@ -18,8 +18,10 @@ type Alert struct {
 	Fingerprint string            `json:"fingerprint"`
 }
 
-// AlertWebhookResponse 是 webhook 响应。
+// AlertWebhookResponse 是 webhook 响应。Errors 记录逐条处理失败的告警明细，
+// 便于 Alertmanager 侧排查（不再静默吞错）。
 type AlertWebhookResponse struct {
 	Created  []string `json:"created"`
 	Resolved []string `json:"resolved"`
+	Errors   []string `json:"errors,omitempty"`
 }

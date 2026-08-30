@@ -47,7 +47,12 @@ type CreateIncidentInput struct {
 
 // Create 创建一个 Incident，并基于指纹去重。
 //
-// 返回创建后的 Incident 以及是否为新创建（false 表示命中去重、返回已有记录）。
+// 去重语义：
+//   - 命中非终态（OPEN/INVESTIGATING/...）同指纹 Incident：直接返回已有记录（created=false）
+//   - 命中终态（RESOLVED/FAILED/CANCELLED）同指纹 Incident：视为告警复发，
+//     重开为 OPEN 进入新一轮告警周期（created=true）
+//
+// 返回创建后的 Incident 以及是否为新创建（false 表示命中活跃去重、返回已有记录）。
 func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.Incident, bool, error) {
 	if in.Service == "" {
 		return nil, false, fmt.Errorf("%w: service is required", ErrInvalidInput)
@@ -60,7 +65,7 @@ func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.In
 
 	// 去重：同服务同告警（或同标题）视为同一次故障。
 	if existing, err := s.repo.GetByFingerprint(ctx, fingerprint); err == nil {
-		return existing, false, nil
+		return s.dedupHit(ctx, existing, fingerprint)
 	} else if !errors.Is(err, repository.ErrNotFound) {
 		return nil, false, err
 	}
@@ -88,13 +93,41 @@ func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.In
 		// 返回已有记录（created=false），避免高并发下重复 Incident。
 		if errors.Is(err, repository.ErrConflict) {
 			if existing, gerr := s.repo.GetByFingerprint(ctx, fingerprint); gerr == nil {
-				return existing, false, nil
+				return s.dedupHit(ctx, existing, fingerprint)
 			}
 		}
 		return nil, false, err
 	}
 	metrics.IncidentsTotal.WithLabelValues(inc.Service, inc.Severity).Inc()
 	return inc, true, nil
+}
+
+// dedupHit 处理指纹命中的去重：
+//   - 非终态：直接返回（活跃告警周期内去重）
+//   - 终态：重开为 OPEN（告警复发，进入新一轮周期），返回 created=true
+//
+// 重开同样受乐观锁（version CAS）保护：并发重开冲突时读取最新记录返回，
+// 不会出现双写或状态回退。
+func (s *Service) dedupHit(ctx context.Context, existing *model.Incident, fingerprint string) (*model.Incident, bool, error) {
+	if !existing.Status.IsTerminal() {
+		return existing, false, nil
+	}
+
+	now := time.Now()
+	existing.Status = model.StatusOpen
+	existing.ResolvedAt = nil
+	existing.UpdatedAt = now
+	if err := s.repo.Update(ctx, existing); err != nil {
+		if errors.Is(err, repository.ErrConcurrentModification) {
+			// 并发重开冲突：其他人已重开，返回其最新记录。
+			if cur, gerr := s.repo.GetByFingerprint(ctx, fingerprint); gerr == nil {
+				return cur, true, nil
+			}
+		}
+		return nil, false, err
+	}
+	metrics.IncidentsTotal.WithLabelValues(existing.Service, existing.Severity).Inc()
+	return existing, true, nil
 }
 
 // Get 按 ID 查询 Incident。

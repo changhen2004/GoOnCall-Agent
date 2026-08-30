@@ -142,6 +142,71 @@ func TestCreate_ConcurrentDedup(t *testing.T) {
 	}
 }
 
+func TestCreate_ReopenResolvedIncident(t *testing.T) {
+	ctx := context.Background()
+	svc := newService()
+
+	first, created, err := svc.Create(ctx, CreateIncidentInput{
+		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err",
+	})
+	if err != nil || !created {
+		t.Fatalf("first Create() = (%v, %v), err=%v", first.ID, created, err)
+	}
+	// 外部恢复：Alertmanager resolved 通知直接关闭 Incident。
+	resolvedInc, err := svc.ResolveExternally(ctx, first.Fingerprint)
+	if err != nil {
+		t.Fatalf("ResolveExternally() error = %v", err)
+	}
+
+	// 告警复发：同一指纹再次 firing，应重开为 OPEN 而非去重忽略。
+	second, created2, err := svc.Create(ctx, CreateIncidentInput{
+		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err again",
+	})
+	if err != nil {
+		t.Fatalf("second Create() error = %v", err)
+	}
+	if !created2 {
+		t.Fatal("second Create() created = false, want true (reopen on recurrence)")
+	}
+	if second.ID != first.ID {
+		t.Errorf("reopen returned %s, want same incident %s", second.ID, first.ID)
+	}
+	if second.Status != model.StatusOpen {
+		t.Errorf("reopened status = %s, want OPEN", second.Status)
+	}
+	if second.ResolvedAt != nil {
+		t.Error("reopened incident resolved_at should be cleared")
+	}
+	if second.Version != resolvedInc.Version+1 {
+		t.Errorf("reopened version = %d, want %d (CAS bump)", second.Version, resolvedInc.Version+1)
+	}
+}
+
+func TestCreate_DedupActiveIncident(t *testing.T) {
+	ctx := context.Background()
+	svc := newService()
+
+	first, created, err := svc.Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "a", Title: "t"})
+	if err != nil || !created {
+		t.Fatalf("first Create() = (%v, %v), err=%v", first.ID, created, err)
+	}
+
+	// 活跃周期内重复 firing：直接去重返回，不重开、不改变状态。
+	second, created2, err := svc.Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "a", Title: "t2"})
+	if err != nil {
+		t.Fatalf("second Create() error = %v", err)
+	}
+	if created2 {
+		t.Fatal("second Create() created = true, want false (active dedup)")
+	}
+	if second.ID != first.ID {
+		t.Errorf("dedup returned %s, want %s", second.ID, first.ID)
+	}
+	if second.Status != model.StatusOpen {
+		t.Errorf("dedup status = %s, want unchanged OPEN", second.Status)
+	}
+}
+
 func TestGet_NotFound(t *testing.T) {
 	svc := newService()
 	if _, err := svc.Get(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {

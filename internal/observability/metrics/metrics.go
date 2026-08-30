@@ -30,4 +30,10 @@ var (
 		Name: "gooncall_approval_total",
 		Help: "Total number of approvals.",
 	}, []string{"action", "status"})
+
+	// WebhookTotal 统计 Alertmanager webhook 处理结果（按 action=create/resolve, status=ok/error）。
+	WebhookTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gooncall_webhook_total",
+		Help: "Total number of alertmanager webhook events processed.",
+	}, []string{"action", "status"})
 )
