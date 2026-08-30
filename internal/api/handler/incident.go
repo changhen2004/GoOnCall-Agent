@@ -20,11 +20,17 @@ type Diagnoser interface {
 	Diagnose(ctx context.Context, inc *model.Incident, systemPrompt string) (*agentruntime.DiagnosisResult, error)
 }
 
+// Publisher 发布 Agent 请求事件（异步诊断）。
+type Publisher interface {
+	PublishAgentRequested(ctx context.Context, incidentID string) error
+}
+
 // IncidentHandler 处理 Incident 相关 HTTP 请求。
 type IncidentHandler struct {
 	service         *incidentservice.Service
 	diagnoser       Diagnoser
 	diagnosisPrompt string
+	publisher       Publisher
 }
 
 // NewIncidentHandler 创建 Incident 处理器。
@@ -32,10 +38,16 @@ func NewIncidentHandler(svc *incidentservice.Service) *IncidentHandler {
 	return &IncidentHandler{service: svc}
 }
 
-// WithDiagnoser 注入诊断 Agent（可选；未配置时 analyze 仅做状态流转）。
+// WithDiagnoser 注入诊断 Agent（同步兜底；未配置时 analyze 仅做状态流转）。
 func (h *IncidentHandler) WithDiagnoser(d Diagnoser, prompt string) *IncidentHandler {
 	h.diagnoser = d
 	h.diagnosisPrompt = prompt
+	return h
+}
+
+// WithPublisher 注入事件发布器（异步诊断：RabbitMQ -> Worker -> Agent）。
+func (h *IncidentHandler) WithPublisher(p Publisher) *IncidentHandler {
+	h.publisher = p
 	return h
 }
 
@@ -108,7 +120,12 @@ func (h *IncidentHandler) Analyze(c *gin.Context) {
 
 	resp := dto.AnalyzeResponse{Incident: dto.ToIncidentResponse(inc)}
 
-	if h.diagnoser != nil {
+	// 优先异步（RabbitMQ -> Worker -> Agent），否则同步诊断兜底。
+	if h.publisher != nil {
+		if err := h.publisher.PublishAgentRequested(c.Request.Context(), inc.ID); err != nil {
+			resp.Diagnosis = &dto.DiagnosisResponse{Error: err.Error()}
+		}
+	} else if h.diagnoser != nil {
 		result, err := h.diagnoser.Diagnose(c.Request.Context(), inc, h.diagnosisPrompt)
 		if err != nil {
 			resp.Diagnosis = &dto.DiagnosisResponse{Error: err.Error()}
