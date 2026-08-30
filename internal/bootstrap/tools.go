@@ -30,7 +30,15 @@ func buildToolRegistry(cfg *config.Config, repo repository.Repository, rag retri
 	}
 
 	if cfg.Prometheus.URL != "" {
-		if t, err := prometheus.New(cfg.Prometheus.URL).EinoTool(); err == nil {
+		pt := prometheus.New(cfg.Prometheus.URL)
+		// 即时查询（prometheus.query）+ 活跃告警（prometheus.alerts）+ 范围查询（prometheus.range_query）。
+		if t, err := pt.EinoTool(); err == nil {
+			_ = reg.Register(t, registry.RiskLow)
+		}
+		if t, err := pt.AlertsEinoTool(); err == nil {
+			_ = reg.Register(t, registry.RiskLow)
+		}
+		if t, err := pt.RangeEinoTool(); err == nil {
 			_ = reg.Register(t, registry.RiskLow)
 		}
 	}
