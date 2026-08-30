@@ -76,6 +76,10 @@ curl localhost:9093/api/v2/alerts             # Alertmanager 实际收到的告�
 
 > 注意：Alertmanager 配置不支持 `${VAR}` 插值（[prometheus/alertmanager#2207](https://github.com/prometheus/alertmanager/issues/2207)），webhook URL 硬编码在 `deploy/alertmanager/alertmanager.yml`。若 API 在宿主机直接运行（`go run ./cmd/api`），把 URL 改为 `http://host.docker.internal:8082/api/v1/alerts`（compose 已为 alertmanager 配置 `extra_hosts: host.docker.internal`）。
 
+### Grafana 概览面板
+
+GoOnCall 自身的 Grafana 通过 provisioning 自动加载（`deploy/grafana/provisioning/`）：Prometheus 数据源 + 「GoOnCall Agent 概览」面板（Incident 创建/累计、Agent Run、工具调用、webhook 处理、人工审批速率）。默认地址 `http://localhost:3000`（`admin/admin`），与 GoCommunity 共存时用 `GRAFANA_PORT=3005` 启动。
+
 ## API 一览
 
 | 方法 | 路径 | 说明 |
