@@ -23,6 +23,7 @@ type Config struct {
 	Approval     ApprovalConfig     `yaml:"approval"`
 	Verification VerificationConfig `yaml:"verification"`
 	VectorStore  VectorStoreConfig  `yaml:"vector_store"`
+	Tool         ToolConfig         `yaml:"tool"`
 }
 
 // ServerConfig 是 HTTP 服务配置。
@@ -94,6 +95,11 @@ type VectorStoreConfig struct {
 	Provider string `yaml:"provider"`
 }
 
+// ToolConfig 是工具执行配置。
+type ToolConfig struct {
+	TimeoutSeconds int `yaml:"timeout_seconds"`
+}
+
 // Default 返回带安全默认值的配置。
 func Default() *Config {
 	return &Config{
@@ -122,6 +128,9 @@ func Default() *Config {
 		},
 		VectorStore: VectorStoreConfig{
 			Provider: "memory",
+		},
+		Tool: ToolConfig{
+			TimeoutSeconds: 30,
 		},
 	}
 }

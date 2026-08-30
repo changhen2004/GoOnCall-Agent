@@ -4,6 +4,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/flow/agent/react"
@@ -22,11 +23,13 @@ type DiagnosisResult struct {
 
 // Runtime 是 Agent 运行时，负责构建 ReAct Agent 并执行诊断。
 type Runtime struct {
-	chatModel model.ToolCallingChatModel
-	registry  *registry.Registry
-	maxSteps  int
-	runRepo   repository.RunRepository
-	broker    *StreamBroker
+	chatModel    model.ToolCallingChatModel
+	registry     *registry.Registry
+	maxSteps     int
+	runRepo      repository.RunRepository
+	broker       *StreamBroker
+	toolTimeout  time.Duration
+	maxToolCalls int
 }
 
 // New 创建 Agent Runtime。
@@ -48,12 +51,23 @@ func (rt *Runtime) WithRunRecording(runRepo repository.RunRepository, broker *St
 	return rt
 }
 
+// WithToolLimits 设置工具执行超时与最大调用次数。
+func (rt *Runtime) WithToolLimits(timeout time.Duration, maxToolCalls int) *Runtime {
+	if timeout > 0 {
+		rt.toolTimeout = timeout
+	}
+	if maxToolCalls > 0 {
+		rt.maxToolCalls = maxToolCalls
+	}
+	return rt
+}
+
 // Diagnose 对 Incident 执行诊断：Incident -> Agent -> Tool -> Result。
 // 若启用 Run 记录，则创建 AgentRun 并记录步骤、工具调用与 SSE 事件。
 func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, systemPrompt string) (*DiagnosisResult, error) {
 	var rec *Recorder
 	if rt.runRepo != nil {
-		rec = NewRecorder(rt.runRepo, rt.broker, inc, "diagnosis")
+		rec = NewRecorder(rt.runRepo, rt.broker, inc, "diagnosis", rt.maxToolCalls)
 		if err := rec.Start(ctx); err != nil {
 			return nil, err
 		}
@@ -72,7 +86,7 @@ func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, sy
 
 	tools := rt.registry.EinoTools()
 	if rec != nil {
-		tools = wrapTools(rt.registry, rec)
+		tools = wrapTools(rt.registry, rec, rt.toolTimeout)
 		ctx = WithRunID(ctx, rec.RunID())
 	}
 

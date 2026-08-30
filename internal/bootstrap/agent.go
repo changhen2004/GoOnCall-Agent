@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	agentruntime "gooncall-agent/internal/agent/runtime"
 	"gooncall-agent/internal/api/handler"
@@ -21,7 +22,9 @@ func buildAgent(cfg *config.Config, reg *registry.Registry, runRepo repository.R
 	}
 
 	chatModel := agentruntime.NewOpenAIChatModel(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.Model)
-	rt := agentruntime.New(chatModel, reg, cfg.Agent.MaxSteps).WithRunRecording(runRepo, broker)
+	rt := agentruntime.New(chatModel, reg, cfg.Agent.MaxSteps).
+		WithRunRecording(runRepo, broker).
+		WithToolLimits(time.Duration(cfg.Tool.TimeoutSeconds)*time.Second, cfg.Agent.MaxToolCalls)
 	prompt := loadPrompt(diagnosisPromptPath)
 	slog.Info("agent runtime enabled", "model", cfg.LLM.Model, "tools", reg.Names())
 	return rt, rt, prompt

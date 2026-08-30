@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/cloudwego/eino/components/tool"
@@ -14,19 +15,21 @@ import (
 	"gooncall-agent/internal/tool/registry"
 )
 
-// toolTimeout 是单次工具调用的超时时间。
-const toolTimeout = 30 * time.Second
+// ErrMaxToolCalls 表示工具调用次数超过上限。
+var ErrMaxToolCalls = fmt.Errorf("tool call count exceeds max")
 
 // Recorder 记录 Agent Run 生命周期（Run/Step/ToolCall），并发布 SSE 事件。
 type Recorder struct {
-	runRepo repository.RunRepository
-	broker  *StreamBroker
-	run     *incidentmodel.AgentRun
-	stepIdx int
+	runRepo      repository.RunRepository
+	broker       *StreamBroker
+	run          *incidentmodel.AgentRun
+	stepIdx      int
+	maxToolCalls int
+	toolCalls    int
 }
 
 // NewRecorder 创建 Recorder 并初始化一个 RUNNING 状态的 AgentRun。
-func NewRecorder(runRepo repository.RunRepository, broker *StreamBroker, inc *incidentmodel.Incident, agentType string) *Recorder {
+func NewRecorder(runRepo repository.RunRepository, broker *StreamBroker, inc *incidentmodel.Incident, agentType string, maxToolCalls int) *Recorder {
 	run := &incidentmodel.AgentRun{
 		ID:         "run_" + uuid.NewString(),
 		IncidentID: inc.ID,
@@ -35,7 +38,16 @@ func NewRecorder(runRepo repository.RunRepository, broker *StreamBroker, inc *in
 		Goal:       inc.Title,
 		StartedAt:  time.Now(),
 	}
-	return &Recorder{runRepo: runRepo, broker: broker, run: run}
+	return &Recorder{runRepo: runRepo, broker: broker, run: run, maxToolCalls: maxToolCalls}
+}
+
+// checkToolCall 检查并登记一次工具调用，超过上限返回 ErrMaxToolCalls。
+func (r *Recorder) checkToolCall() error {
+	r.toolCalls++
+	if r.maxToolCalls > 0 && r.toolCalls > r.maxToolCalls {
+		return ErrMaxToolCalls
+	}
+	return nil
 }
 
 // RunID 返回当前 Run 的 ID。
@@ -129,6 +141,7 @@ type recordingTool struct {
 	name     string
 	risk     string
 	recorder *Recorder
+	timeout  time.Duration
 }
 
 func (t *recordingTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -136,10 +149,17 @@ func (t *recordingTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t *recordingTool) InvokableRun(ctx context.Context, args string, opts ...tool.Option) (string, error) {
+	if err := t.recorder.checkToolCall(); err != nil {
+		return "", err
+	}
 	t.recorder.ToolStarted(t.name)
 	start := time.Now()
 
-	callCtx, cancel := context.WithTimeout(ctx, toolTimeout)
+	timeout := t.timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	result, err := t.inner.InvokableRun(callCtx, args, opts...)
@@ -148,7 +168,7 @@ func (t *recordingTool) InvokableRun(ctx context.Context, args string, opts ...t
 }
 
 // wrapTools 将注册表内所有工具包装为带记录能力的工具。
-func wrapTools(reg *registry.Registry, rec *Recorder) []tool.BaseTool {
+func wrapTools(reg *registry.Registry, rec *Recorder, timeout time.Duration) []tool.BaseTool {
 	all := reg.All()
 	out := make([]tool.BaseTool, 0, len(all))
 	for _, rt := range all {
@@ -157,6 +177,7 @@ func wrapTools(reg *registry.Registry, rec *Recorder) []tool.BaseTool {
 			name:     rt.Name,
 			risk:     string(rt.RiskLevel),
 			recorder: rec,
+			timeout:  timeout,
 		})
 	}
 	return out

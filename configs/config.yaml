@@ -40,6 +40,9 @@ agent:
   max_tool_calls: 20
   timeout_seconds: 180
 
+tool:
+  timeout_seconds: 30
+
 approval:
   enabled: true
 
