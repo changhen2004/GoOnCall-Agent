@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // MetricGatherer 采集处置后的验证指标。
@@ -55,6 +57,13 @@ func DefaultQueries() Queries {
 	}
 }
 
+// Prometheus 请求自身的资源上限：调用方 context 可能没有 deadline，
+// 不能让它被异常 Prometheus 拖住；响应体只需要解析首条样本，也要有硬上限。
+const (
+	prometheusTimeout      = 10 * time.Second
+	maxPrometheusBodyBytes = 1 << 20 // 1 MiB
+)
+
 // NewPrometheusGatherer 创建 Prometheus 采集器；queries 中为空字段回退默认值。
 func NewPrometheusGatherer(baseURL string, queries Queries) *PrometheusGatherer {
 	def := DefaultQueries()
@@ -67,7 +76,11 @@ func NewPrometheusGatherer(baseURL string, queries Queries) *PrometheusGatherer 
 	if queries.ErrorRate == "" {
 		queries.ErrorRate = def.ErrorRate
 	}
-	return &PrometheusGatherer{client: &http.Client{}, baseURL: strings.TrimRight(baseURL, "/"), queries: queries}
+	return &PrometheusGatherer{
+		client:  &http.Client{Timeout: prometheusTimeout},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		queries: queries,
+	}
 }
 
 // Gather 查询消费者数、队列积压与 5xx 错误率（PromQL 来自配置）。
@@ -104,7 +117,7 @@ func (g *PrometheusGatherer) queryScalar(ctx context.Context, query string) (flo
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPrometheusBodyBytes))
 	if err != nil {
 		return 0, err
 	}
@@ -123,16 +136,30 @@ func (g *PrometheusGatherer) queryScalar(ctx context.Context, query string) (flo
 	if err := json.Unmarshal(body, &pr); err != nil {
 		return 0, err
 	}
-	if pr.Status != "success" || len(pr.Data.Result) == 0 || len(pr.Data.Result[0].Value) < 2 {
-		return 0, nil
+	if pr.Status != "success" {
+		return 0, fmt.Errorf("prometheus query %q failed: status %q", query, pr.Status)
+	}
+	if len(pr.Data.Result) == 0 || len(pr.Data.Result[0].Value) < 2 {
+		// 空结果不是 0：没有数据就无法证明处置生效，必须让验证失败而不是判成"正常"。
+		return 0, fmt.Errorf("prometheus query %q returned no data", query)
 	}
 
+	var value float64
 	switch v := pr.Data.Result[0].Value[1].(type) {
 	case string:
-		return strconv.ParseFloat(v, 64)
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse prometheus value %q of query %q: %w", v, query, err)
+		}
+		value = parsed
 	case float64:
-		return v, nil
+		value = v
 	default:
-		return 0, fmt.Errorf("unexpected prometheus value type %T", v)
+		return 0, fmt.Errorf("unexpected prometheus value type %T for query %q", v, query)
 	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		// NaN/Inf 同样不能按 0 处理：0 会把错误率当成"正常"，从而把未恢复判成已恢复。
+		return 0, fmt.Errorf("prometheus query %q returned non-finite value %v", query, value)
+	}
+	return value, nil
 }

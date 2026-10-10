@@ -4,7 +4,9 @@ package deployment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 	toolutils "github.com/cloudwego/eino/components/tool/utils"
@@ -19,6 +21,10 @@ import (
 type Tool struct {
 	approval *approval.Service
 	policy   *policy.Engine
+	// allowedTargets 为 nil 表示未配置白名单（Mock/Demo 模式）；
+	// 非 nil 时只允许列表内的 target。HTTP 执行模式必须由 Bootstrap 配置。
+	allowedTargets []string
+	http           *HTTPExecutor
 }
 
 // New 创建重启工具。
@@ -30,6 +36,43 @@ func New(approvalSvc *approval.Service, policyEngine *policy.Engine) *Tool {
 func (t *Tool) SetApproval(svc *approval.Service) *Tool {
 	t.approval = svc
 	return t
+}
+
+// WithAllowedTargets 设置 target 白名单（HTTP 执行模式必须配置；传空切片表示禁止任何 target）。
+func (t *Tool) WithAllowedTargets(targets []string) *Tool {
+	t.allowedTargets = targets
+	return t
+}
+
+// WithHTTPExecutor 用固定 URL 的 HTTP 适配器替换模拟执行。
+func (t *Tool) WithHTTPExecutor(e *HTTPExecutor) *Tool {
+	t.http = e
+	return t
+}
+
+// checkTarget 校验 target：空值一律拒绝；配置了白名单时只允许列表内的成员。
+//
+// 接入 HTTP executor 后不存在"未配置就放行"：真实处置必须显式给出白名单，
+// 否则 LLM 可以用任意 target 触发真实重启。
+func (t *Tool) checkTarget(target string) error {
+	if strings.TrimSpace(target) == "" {
+		return errors.New("worker.restart target is required")
+	}
+	if t.allowedTargets == nil {
+		if t.http != nil {
+			return errors.New("worker.restart target whitelist is not configured, refusing to call the deployment endpoint")
+		}
+		return nil
+	}
+	if len(t.allowedTargets) == 0 {
+		return errors.New("worker.restart target whitelist is empty, no target is allowed")
+	}
+	for _, allowed := range t.allowedTargets {
+		if allowed == target {
+			return nil
+		}
+	}
+	return fmt.Errorf("worker.restart target %q is not in the allowed targets", target)
 }
 
 // RestartInput 是重启入参。
@@ -54,35 +97,49 @@ func (t *Tool) request(ctx context.Context, in RestartInput) (RestartResult, err
 	if t.approval == nil {
 		return RestartResult{}, fmt.Errorf("worker.restart requires approval but approval service unavailable")
 	}
+	// 请求审批前先校验 target：LLM 不能通过任意 target 扩大处置范围。
+	if err := t.checkTarget(in.Target); err != nil {
+		return RestartResult{}, err
+	}
 
 	args, _ := json.Marshal(in)
 	runID := agentruntime.RunIDFrom(ctx)
+	// ToolCall ID 由 Recorder 在调用工具前生成并经 context 传入：
+	// ToolCall 记录与 Approval 必须引用同一个 ID，否则审计链断裂。
+	toolCallID := agentruntime.ToolCallIDFrom(ctx)
 
-	a, err := t.approval.Request(ctx, runID, "", "restart_worker", string(args), in.Reason)
+	a, err := t.approval.Request(ctx, runID, toolCallID, "restart_worker", string(args), in.Reason)
 	if err != nil {
 		return RestartResult{}, err
 	}
 	return RestartResult{Status: "pending_approval", ApprovalID: a.ID, Target: in.Target}, nil
 }
 
-// Execute 执行重启动作（审批通过后由 ApprovalService 调用）。
-func (t *Tool) Execute(_ context.Context, action, arguments string) (string, error) {
+// Execute 执行重启动作（审批通过后由 ApprovalService 调用；approval_id 幂等键经 context 传入）。
+func (t *Tool) Execute(ctx context.Context, action, arguments string) (approval.ExecutionResult, error) {
 	if action != "restart_worker" {
-		return "", fmt.Errorf("unknown action %q", action)
+		return approval.ExecutionResult{}, fmt.Errorf("unknown action %q", action)
 	}
 	var in RestartInput
 	if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-		return "", fmt.Errorf("parse restart arguments: %w", err)
+		return approval.ExecutionResult{}, fmt.Errorf("parse restart arguments: %w", err)
+	}
+	// 执行前再校验一次：审批可能在白名单变更之前创建。
+	if err := t.checkTarget(in.Target); err != nil {
+		return approval.ExecutionResult{}, err
+	}
+	if t.http != nil {
+		return t.http.Execute(ctx, action, arguments)
 	}
 
-	// v1.0 模拟重启；Phase 6 接入真实部署后执行 consumer count / queue depth 验证。
+	// Mock 模式模拟重启；HTTP 模式由 HTTPExecutor 调用固定 endpoint。
 	result := RestartResult{
 		Status:  "completed",
 		Target:  in.Target,
 		Message: fmt.Sprintf("worker %s restarted", in.Target),
 	}
 	data, _ := json.Marshal(result)
-	return string(data), nil
+	return approval.ExecutionResult{Output: string(data)}, nil
 }
 
 // EinoTool 返回 Eino 工具表示。
