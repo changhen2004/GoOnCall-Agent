@@ -43,10 +43,10 @@ tidy: ## 整理依赖
 	go mod tidy
 
 up: ## 启动 docker compose 基础设施
-	docker compose up -d postgres redis rabbitmq prometheus alertmanager qdrant grafana
+	EXECUTION_MODE=mock docker compose up -d postgres rabbitmq prometheus alertmanager grafana
 
 down: ## 停止 docker compose
-	docker compose down
+	EXECUTION_MODE=mock docker compose down
 
 clean: ## 清理构建产物
 	rm -rf bin coverage.out

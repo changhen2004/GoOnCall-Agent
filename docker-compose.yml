@@ -16,7 +16,10 @@ services:
       timeout: 5s
       retries: 10
 
+  # Redis / Qdrant 不在默认启动范围内：闭环不依赖它们（指纹去重走 PostgreSQL，
+  # RAG 默认使用内存向量库）。需要时用 --profile rag 显式启用。
   redis:
+    profiles: ["rag"]
     image: redis:7-alpine
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -41,7 +44,8 @@ services:
       retries: 10
 
   qdrant:
-    # 固定版本，避免 latest 未来 breaking change（当前：2026-08）
+    profiles: ["rag"]
+    # 固定版本，避免 latest 未来 breaking change
     image: qdrant/qdrant:v1.19.0
     ports:
       - "${QDRANT_PORT:-6333}:6333"
@@ -91,7 +95,6 @@ services:
     environment:
       CONFIG_PATH: /app/configs/config.yaml
       POSTGRES_DSN: postgres://gooncall:gooncall@postgres:5432/gooncall?sslmode=disable
-      REDIS_ADDR: redis:6379
       RABBITMQ_URL: amqp://gooncall:gooncall@rabbitmq:5672/
       RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
       RABBITMQ_USERNAME: gooncall
@@ -99,7 +102,18 @@ services:
       # Agent 的 Prometheus 工具与验证采集器指向的业务 Prometheus。
       # 本地联调可覆盖为宿主 GoCommunity 的 Prometheus：PROMETHEUS_URL=http://host.docker.internal:9091
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
-      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+      # 认证与处置通道：Demo 必须显式设置 EXECUTION_MODE=mock。
+      ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN:-}
+      API_READ_TOKEN: ${API_READ_TOKEN:-}
+      API_ADMIN_TOKEN: ${API_ADMIN_TOKEN:-}
+      API_ADMIN_ACTOR: ${API_ADMIN_ACTOR:-gooncall-admin}
+      # API 侧执行批准后的处置：mode=http 时必须同时配置 verification.mode=prometheus、
+      # restart_url、白名单与三个 Token，否则启动失败（见 config.Validate）。
+      EXECUTION_MODE: ${EXECUTION_MODE:?set EXECUTION_MODE=mock for Demo or http for production}
+      VERIFICATION_MODE: ${VERIFICATION_MODE:-mock}
+      RESTART_WORKER_URL: ${RESTART_WORKER_URL:-}
+      RESTART_WORKER_TOKEN: ${RESTART_WORKER_TOKEN:-}
+      RESTART_WORKER_ALLOWED_TARGETS: ${RESTART_WORKER_ALLOWED_TARGETS:-}
       # LLM 配置（为空则不装配诊断 Agent，analyze 仅做状态流转）。
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -108,9 +122,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${GOONCALL_API_PORT:-8080}:8080"
+      - "127.0.0.1:${GOONCALL_API_PORT:-8080}:8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   gooncall-worker:
@@ -122,10 +138,17 @@ services:
     environment:
       CONFIG_PATH: /app/configs/config.yaml
       POSTGRES_DSN: postgres://gooncall:gooncall@postgres:5432/gooncall?sslmode=disable
-      REDIS_ADDR: redis:6379
       RABBITMQ_URL: amqp://gooncall:gooncall@rabbitmq:5672/
       # Worker 运行诊断 Agent，需要 Prometheus 工具（查询/告警/范围查询）。
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+      EXECUTION_MODE: ${EXECUTION_MODE:?set EXECUTION_MODE=mock for Demo or http for production}
+      VERIFICATION_MODE: ${VERIFICATION_MODE:-mock}
+      ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN:-}
+      API_READ_TOKEN: ${API_READ_TOKEN:-}
+      API_ADMIN_TOKEN: ${API_ADMIN_TOKEN:-}
+      RESTART_WORKER_URL: ${RESTART_WORKER_URL:-}
+      RESTART_WORKER_TOKEN: ${RESTART_WORKER_TOKEN:-}
+      RESTART_WORKER_ALLOWED_TARGETS: ${RESTART_WORKER_ALLOWED_TARGETS:-}
       # LLM 配置（为空则不装配诊断 Agent，仅做状态流转）。
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
