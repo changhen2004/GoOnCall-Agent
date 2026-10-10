@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,9 +13,52 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	incidentmodel "gooncall-agent/internal/incident/model"
+	"gooncall-agent/internal/incident/repository"
 	"gooncall-agent/internal/tool/registry"
 	"gooncall-agent/internal/tool/runbook"
 )
+
+type finalModel struct{}
+
+func (finalModel) Generate(context.Context, []*schema.Message, ...model.Option) (*schema.Message, error) {
+	return &schema.Message{Role: schema.Assistant, Content: "diagnosis complete"}, nil
+}
+
+func (finalModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	msg, err := (finalModel{}).Generate(ctx, input, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{msg}), nil
+}
+
+func (finalModel) WithTools([]*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	return finalModel{}, nil
+}
+
+type terminalFailingRunRepo struct {
+	*repository.MemoryRun
+	failStep     bool
+	failComplete bool
+	failFailed   bool
+}
+
+func (r *terminalFailingRunRepo) AddStep(ctx context.Context, step *incidentmodel.AgentStep) error {
+	if r.failStep {
+		return errors.New("step store unavailable")
+	}
+	return r.MemoryRun.AddStep(ctx, step)
+}
+
+func (r *terminalFailingRunRepo) UpdateRun(ctx context.Context, run *incidentmodel.AgentRun) error {
+	if run.Status == incidentmodel.RunCompleted && r.failComplete {
+		return errors.New("completion store unavailable")
+	}
+	if run.Status == incidentmodel.RunFailed && r.failFailed {
+		return errors.New("failure store unavailable")
+	}
+	return r.MemoryRun.UpdateRun(ctx, run)
+}
 
 // fakeModel 是脚本化的 ToolCallingChatModel：首次返回工具调用，见工具结果后返回最终结论。
 type fakeModel struct {
@@ -138,5 +182,40 @@ func TestRuntime_DiagnoseRunTimeout(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestRuntime_DiagnoseReturnsStepPersistenceError(t *testing.T) {
+	repo := &terminalFailingRunRepo{MemoryRun: repository.NewMemoryRun(), failStep: true}
+	rt := New(finalModel{}, registry.New(), 15).WithRunRecording(repo, NewStreamBroker())
+	inc := &incidentmodel.Incident{ID: "inc_step_error", Title: "t", Status: incidentmodel.StatusInvestigating}
+
+	_, err := rt.Diagnose(context.Background(), inc, "prompt")
+	if err == nil || !strings.Contains(err.Error(), "step store unavailable") {
+		t.Fatalf("Diagnose() error = %v, want step persistence error", err)
+	}
+}
+
+func TestRuntime_DiagnoseReturnsCompletionPersistenceError(t *testing.T) {
+	repo := &terminalFailingRunRepo{MemoryRun: repository.NewMemoryRun(), failComplete: true}
+	rt := New(finalModel{}, registry.New(), 15).WithRunRecording(repo, NewStreamBroker())
+	inc := &incidentmodel.Incident{ID: "inc_complete_error", Title: "t", Status: incidentmodel.StatusInvestigating}
+
+	_, err := rt.Diagnose(context.Background(), inc, "prompt")
+	if err == nil || !strings.Contains(err.Error(), "completion store unavailable") {
+		t.Fatalf("Diagnose() error = %v, want completion persistence error", err)
+	}
+}
+
+func TestRuntime_DiagnoseReportsFailurePersistenceError(t *testing.T) {
+	repo := &terminalFailingRunRepo{MemoryRun: repository.NewMemoryRun(), failFailed: true}
+	rt := New(blockingModel{}, registry.New(), 15).
+		WithRunRecording(repo, NewStreamBroker()).
+		WithRunTimeout(10 * time.Millisecond)
+	inc := &incidentmodel.Incident{ID: "inc_fail_error", Title: "t", Status: incidentmodel.StatusInvestigating}
+
+	_, err := rt.Diagnose(context.Background(), inc, "prompt")
+	if err == nil || !strings.Contains(err.Error(), "failure store unavailable") {
+		t.Fatalf("Diagnose() error = %v, want failure persistence error", err)
 	}
 }

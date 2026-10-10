@@ -3,6 +3,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -99,7 +100,7 @@ func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, sy
 	reActAgent, err := agent.Build(ctx, tools)
 	if err != nil {
 		if rec != nil {
-			rec.Fail(ctx, err)
+			err = errors.Join(err, rec.Fail(ctx, err))
 		}
 		return nil, fmt.Errorf("build diagnosis agent: %w", err)
 	}
@@ -109,14 +110,18 @@ func (rt *Runtime) Diagnose(ctx context.Context, inc *incidentmodel.Incident, sy
 	result, err := reActAgent.Generate(ctx, messages)
 	if err != nil {
 		if rec != nil {
-			rec.Fail(ctx, err)
+			err = errors.Join(err, rec.Fail(ctx, err))
 		}
 		return nil, fmt.Errorf("run diagnosis: %w", err)
 	}
 
 	if rec != nil {
-		rec.Step(ctx, "diagnosis", "finalize", "", result.Content, 0)
-		rec.Complete(ctx)
+		if err := rec.Step(ctx, "diagnosis", "finalize", "", result.Content, 0); err != nil {
+			return nil, errors.Join(err, rec.Fail(ctx, err))
+		}
+		if err := rec.Complete(ctx); err != nil {
+			return nil, errors.Join(err, rec.Fail(ctx, err))
+		}
 	}
 
 	out := &DiagnosisResult{Conclusion: result.Content}

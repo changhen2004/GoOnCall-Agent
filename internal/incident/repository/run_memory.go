@@ -27,22 +27,38 @@ func NewMemoryRun() *MemoryRun {
 	}
 }
 
+// CreateRun 原子创建 Run：ID 重复或同一 Incident 已存在 RUNNING/COMPLETED Run 时返回 ErrConflict
+// （与 Postgres 部分唯一索引 idx_agent_run_active 语义一致）。
 func (m *MemoryRun) CreateRun(_ context.Context, run *model.AgentRun) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.runs[run.ID]; ok {
 		return ErrConflict
 	}
+	for _, existing := range m.runs {
+		if existing.IncidentID == run.IncidentID && existing.Status.IsActive() {
+			return ErrConflict
+		}
+	}
 	cp := *run
 	m.runs[run.ID] = &cp
 	return nil
 }
 
+// UpdateRun 更新 Run；把状态改成 RUNNING/COMPLETED 时若同一 Incident 已有其他活动 Run
+// 则返回 ErrConflict（与 Postgres 部分唯一索引 idx_agent_run_active 行为一致）。
 func (m *MemoryRun) UpdateRun(_ context.Context, run *model.AgentRun) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.runs[run.ID]; !ok {
 		return ErrNotFound
+	}
+	if run.Status.IsActive() {
+		for _, existing := range m.runs {
+			if existing.ID != run.ID && existing.IncidentID == run.IncidentID && existing.Status.IsActive() {
+				return ErrConflict
+			}
+		}
 	}
 	cp := *run
 	m.runs[run.ID] = &cp
@@ -60,6 +76,7 @@ func (m *MemoryRun) GetRun(_ context.Context, id string) (*model.AgentRun, error
 	return &cp, nil
 }
 
+// ListRunsByIncident 按 StartedAt 倒序；时间相同用 ID 正序兜底，保证顺序稳定。
 func (m *MemoryRun) ListRunsByIncident(_ context.Context, incidentID string) ([]*model.AgentRun, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -70,7 +87,12 @@ func (m *MemoryRun) ListRunsByIncident(_ context.Context, incidentID string) ([]
 			out = append(out, &cp)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].StartedAt.After(out[j].StartedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 
@@ -102,6 +124,23 @@ func (m *MemoryRun) AddToolCall(_ context.Context, call *model.ToolCall) error {
 	return nil
 }
 
+// UpdateToolCall 补写工具结果（result / status / duration_ms），保留调用前的元数据。
+func (m *MemoryRun) UpdateToolCall(_ context.Context, call *model.ToolCall) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.calls[call.RunID] {
+		if existing.ID != call.ID {
+			continue
+		}
+		existing.Result = call.Result
+		existing.Status = call.Status
+		existing.DurationMs = call.DurationMs
+		return nil
+	}
+	return ErrNotFound
+}
+
+// ListToolCalls 按 CreatedAt 正序；时间相同用 ID 正序兜底，保证顺序稳定。
 func (m *MemoryRun) ListToolCalls(_ context.Context, runID string) ([]*model.ToolCall, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -110,7 +149,12 @@ func (m *MemoryRun) ListToolCalls(_ context.Context, runID string) ([]*model.Too
 		cp := *c
 		out = append(out, &cp)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 
