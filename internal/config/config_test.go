@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,8 @@ agent:
   timeout_seconds: 90
 approval:
   enabled: false
+execution:
+  mode: mock
 `)
 
 	cfg, err := Load(path)
@@ -68,6 +71,8 @@ redis:
   addr: ${REDIS_ADDR}
 rabbitmq:
   url: ${RABBITMQ_URL}
+execution:
+  mode: mock
 `)
 
 	cfg, err := Load(path)
@@ -87,7 +92,7 @@ rabbitmq:
 }
 
 func TestLoad_AppliesDefaults(t *testing.T) {
-	path := writeTempConfig(t, `server: {}`)
+	path := writeTempConfig(t, "server: {}\nexecution:\n  mode: mock\n")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -127,5 +132,168 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	path := writeTempConfig(t, `server: [unclosed`)
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load() expected error for invalid YAML, got nil")
+	}
+}
+
+func TestLoad_ExecutionAndVerificationDefaults(t *testing.T) {
+	path := writeTempConfig(t, "execution:\n  mode: mock\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Execution.Mode != ExecutionModeMock {
+		t.Errorf("Execution.Mode = %q, want %q (显式 Demo)", cfg.Execution.Mode, ExecutionModeMock)
+	}
+	if cfg.Execution.TimeoutSeconds != 30 {
+		t.Errorf("Execution.TimeoutSeconds = %d, want 30", cfg.Execution.TimeoutSeconds)
+	}
+	if cfg.Verification.Attempts != DefaultVerifyAttempts ||
+		cfg.Verification.IntervalSeconds != DefaultVerifyIntervalSeconds ||
+		cfg.Verification.RequiredSuccesses != DefaultVerifyRequiredSuccesses {
+		t.Errorf("verification defaults = %+v", cfg.Verification)
+	}
+	if cfg.Auth.AdminActor == "" {
+		t.Error("Auth.AdminActor should have a default actor")
+	}
+}
+
+// TestLoad_EmptyExecutionModeIsNotAnExplicitDemo 未设置 EXECUTION_MODE 不能静默开启无认证 Demo。
+func TestLoad_EmptyExecutionModeIsNotAnExplicitDemo(t *testing.T) {
+	t.Setenv("EXECUTION_MODE", "")
+	t.Setenv("VERIFICATION_MODE", "")
+
+	path := writeTempConfig(t, `execution:
+  mode: ${EXECUTION_MODE}
+verification:
+  mode: ${VERIFICATION_MODE}
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() = nil error, want an explicit execution.mode")
+	}
+}
+
+// TestLoad_AllowedTargetsCSV 环境变量展开后是逗号分隔字符串，必须能解析成切片。
+func TestLoad_AllowedTargetsCSV(t *testing.T) {
+	t.Setenv("RESTART_WORKER_ALLOWED_TARGETS", " worker-a , worker-b ,, worker-c ")
+
+	path := writeTempConfig(t, `execution:
+  mode: mock
+  allowed_targets: ${RESTART_WORKER_ALLOWED_TARGETS}
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"worker-a", "worker-b", "worker-c"}
+	if len(cfg.Execution.AllowedTargets) != len(want) {
+		t.Fatalf("AllowedTargets = %v, want %v", cfg.Execution.AllowedTargets, want)
+	}
+	for i := range want {
+		if cfg.Execution.AllowedTargets[i] != want[i] {
+			t.Fatalf("AllowedTargets = %v, want %v", cfg.Execution.AllowedTargets, want)
+		}
+	}
+}
+
+// TestValidate_DangerousCombinations 危险组合必须在启动时失败。
+func TestValidate_DangerousCombinations(t *testing.T) {
+	httpBase := func() *Config {
+		cfg := Default()
+		cfg.Execution.Mode = ExecutionModeHTTP
+		cfg.Execution.RestartURL = "http://restart.internal/restart"
+		cfg.Execution.AllowedTargets = CSVList{"worker-a"}
+		cfg.Verification.Mode = "prometheus"
+		cfg.Prometheus.URL = "http://prometheus:9090"
+		cfg.Auth = AuthConfig{WebhookToken: "w", ReadToken: "r", AdminToken: "a"}
+		cfg.Postgres.DSN = "postgres://db/gooncall"
+		cfg.RabbitMQ.URL = "amqp://rabbitmq/"
+		cfg.LLM.BaseURL = "http://llm/v1"
+		cfg.LLM.Model = "model"
+		return cfg
+	}
+
+	if err := httpBase().Validate(); err != nil {
+		t.Fatalf("valid http config rejected: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"unknown execution mode", func(c *Config) { c.Execution.Mode = "shell" }},
+		{"http without restart url", func(c *Config) { c.Execution.RestartURL = "" }},
+		{"http without allowed targets", func(c *Config) { c.Execution.AllowedTargets = nil }},
+		{"http with mock verification", func(c *Config) { c.Verification.Mode = "mock" }},
+		{"http without webhook token", func(c *Config) { c.Auth.WebhookToken = "" }},
+		{"http without read token", func(c *Config) { c.Auth.ReadToken = "" }},
+		{"http without admin token", func(c *Config) { c.Auth.AdminToken = "" }},
+		{"http without postgres", func(c *Config) { c.Postgres.DSN = "" }},
+		{"http without rabbitmq", func(c *Config) { c.RabbitMQ.URL = "" }},
+		{"http without llm base url", func(c *Config) { c.LLM.BaseURL = "" }},
+		{"http without llm model", func(c *Config) { c.LLM.Model = "" }},
+		{"prometheus without url", func(c *Config) { c.Prometheus.URL = "" }},
+		{"required exceeds attempts", func(c *Config) { c.Verification.Attempts = 1; c.Verification.RequiredSuccesses = 3 }},
+		{"zero attempts", func(c *Config) { c.Verification.Attempts = 0 }},
+		{"unknown verification mode", func(c *Config) { c.Verification.Mode = "guess" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := httpBase()
+			tc.mutate(cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate() = nil, want an error for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestValidate_MockModeAllowsEmptyTokens mock（显式 Demo）允许空 Token，也不要求 HTTP 参数。
+func TestValidate_MockModeAllowsEmptyTokens(t *testing.T) {
+	cfg := Default()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+// TestValidate_DoesNotLeakSecrets 校验错误不得回显 Token / 凭证。
+func TestValidate_DoesNotLeakSecrets(t *testing.T) {
+	const adminSecret = "super-secret-admin-token"
+	const restartSecret = "super-secret-restart-token"
+
+	cfg := Default()
+	cfg.Execution.Mode = ExecutionModeHTTP
+	cfg.Execution.RestartURL = "http://restart.internal/restart"
+	cfg.Execution.Token = restartSecret
+	cfg.Execution.AllowedTargets = CSVList{"worker-a"}
+	cfg.Verification.Mode = "prometheus"
+	cfg.Prometheus.URL = "http://prometheus:9090"
+	// 故意只配 webhook token：admin token 缺失。
+	cfg.Auth = AuthConfig{WebhookToken: "webhook-token-abc", ReadToken: "read-token-def", AdminToken: ""}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want an error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, adminSecret) || strings.Contains(msg, restartSecret) {
+		t.Fatalf("error leaks a secret: %s", msg)
+	}
+	if strings.Contains(msg, cfg.Auth.WebhookToken) || strings.Contains(msg, cfg.Auth.ReadToken) {
+		t.Fatalf("error echoes a configured token: %s", msg)
+	}
+}
+
+// TestLoad_RejectsDangerousConfig Load 必须拒绝危险组合（而不是运行到一半才失败）。
+func TestLoad_RejectsDangerousConfig(t *testing.T) {
+	path := writeTempConfig(t, `execution:
+  mode: http
+  restart_url: http://restart.internal/restart
+  allowed_targets: worker-a
+verification:
+  mode: mock
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() = nil error, want rejection of execution.mode=http with mock verification")
 	}
 }

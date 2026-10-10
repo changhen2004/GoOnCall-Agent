@@ -1,4 +1,4 @@
-# GoOnCall Agent 配置示例。使用 ${VAR} 引用环境变量（未设置时展开为空）。
+# GoOnCall Agent 配置示例。EXECUTION_MODE 必须显式设为 mock 或 http。
 server:
   host: 0.0.0.0
   # 可用环境变量 SERVER_PORT 覆盖（本机与 GoCommunity 等占用 8080 时设为 8082）。
@@ -55,10 +55,37 @@ tool:
 approval:
   enabled: true
 
+# 三类最小认证。Token 为空表示该类未启用，只允许出现在 Demo 配置里
+# （execution.mode=mock）。execution.mode=http 时三者必须全部非空，否则启动失败。
+auth:
+  webhook_token: ${ALERT_WEBHOOK_TOKEN}
+  read_token: ${API_READ_TOKEN}
+  admin_token: ${API_ADMIN_TOKEN}
+  # 批准 / 拒绝落库的 approved_by：服务端配置，请求体里的 approved_by 一律忽略。
+  admin_actor: ${API_ADMIN_ACTOR}
+
+# 真实处置通道。mode=mock 用模拟重启（仅本地 Demo）；
+# mode=http 用固定 URL 的 HTTP 适配器，此时必须配置 restart_url、token、
+# allowed_targets、三类认证 Token、Postgres、RabbitMQ、LLM，
+# 并要求 verification.mode=prometheus。
+execution:
+  mode: ${EXECUTION_MODE}
+  restart_url: ${RESTART_WORKER_URL}
+  token: ${RESTART_WORKER_TOKEN}
+  # 逗号分隔的 target 白名单；http 模式必须非空，否则拒绝所有 target。
+  allowed_targets: ${RESTART_WORKER_ALLOWED_TARGETS}
+  timeout_seconds: 30
+
 verification:
   # mock：固定「已恢复」指标（本地 Demo）；prometheus：实时查询验证指标。
   # 可用环境变量 VERIFICATION_MODE 覆盖（如 VERIFICATION_MODE=prometheus）。
   mode: ${VERIFICATION_MODE}
+  # 连续验证：最多采集 attempts 次，间隔 interval_seconds，连续 required_successes 次
+  # 全部通过才允许 RESOLVED。required_successes 大于 attempts 会被拒绝启动
+  # （不做静默降级，否则等于降低安全强度）。
+  attempts: 3
+  interval_seconds: 10
+  required_successes: 3
   # Prometheus 验证查询（mode=prometheus 时生效）。对接 GoCommunity 业务系统时
   # 覆盖为 resource_community_http_* 指标名，例如：
   #   error_rate: 'sum(rate(resource_community_http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(resource_community_http_requests_total[1m])), 0.001)'
