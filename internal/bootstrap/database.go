@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"gorm.io/gorm"
+
 	"gooncall-agent/internal/config"
 	"gooncall-agent/internal/incident/repository"
 	"gooncall-agent/internal/storage/postgres"
@@ -14,6 +16,8 @@ type databases struct {
 	incidentRepo repository.Repository
 	runRepo      repository.RunRepository
 	approvalRepo repository.ApprovalRepository
+	// db 只在配置了 PostgreSQL DSN 时非 nil（供就绪检查使用）。
+	db *gorm.DB
 }
 
 // buildDatabases 构建各仓库（无 DSN 时回退内存，有 DSN 时共享连接）。
@@ -33,17 +37,13 @@ func buildDatabases(cfg *config.Config) (*databases, error) {
 	}
 
 	incidentRepo := repository.NewPostgres(db)
-	if err := incidentRepo.AutoMigrate(); err != nil {
-		return nil, fmt.Errorf("auto migrate incident: %w", err)
-	}
 	runRepo := repository.NewPostgresRun(db)
-	if err := runRepo.AutoMigrate(); err != nil {
-		return nil, fmt.Errorf("auto migrate run: %w", err)
-	}
 	approvalRepo := repository.NewPostgresApproval(db)
-	if err := approvalRepo.AutoMigrate(); err != nil {
-		return nil, fmt.Errorf("auto migrate approval: %w", err)
-	}
-	slog.Info("postgres connected and migrated")
-	return &databases{incidentRepo: incidentRepo, runRepo: runRepo, approvalRepo: approvalRepo}, nil
+	slog.Info("postgres connected")
+	return &databases{
+		incidentRepo: incidentRepo,
+		runRepo:      runRepo,
+		approvalRepo: approvalRepo,
+		db:           db,
+	}, nil
 }

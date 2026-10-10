@@ -28,12 +28,29 @@ var (
 
 // Service 是 Incident 业务服务。
 type Service struct {
-	repo repository.Repository
+	repo            repository.Repository
+	approvalExpirer PendingApprovalExpirer
+}
+
+// PendingApprovalExpirer 让某个 Incident 的所有 PENDING 审批失效。
+//
+// 由 Bootstrap 注入 approval.Service 实现（approval 依赖本包，因此这里只能是接口）。
+type PendingApprovalExpirer interface {
+	ExpirePending(ctx context.Context, incidentID string) (int, error)
 }
 
 // New 创建一个 Incident Service。
+//
+// Incident 状态写入与审计事件写入由 Repository 在同一个事务/临界区内完成，
+// 因此这里不需要再单独装配事件仓库。
 func New(repo repository.Repository) *Service {
 	return &Service{repo: repo}
+}
+
+// WithApprovalExpirer 注入"外部恢复前先让待审批失效"的组件。
+func (s *Service) WithApprovalExpirer(e PendingApprovalExpirer) *Service {
+	s.approvalExpirer = e
+	return s
 }
 
 // CreateIncidentInput 是创建 Incident 的入参。
@@ -47,12 +64,12 @@ type CreateIncidentInput struct {
 
 // Create 创建一个 Incident，并基于指纹去重。
 //
-// 去重语义：
-//   - 命中非终态（OPEN/INVESTIGATING/...）同指纹 Incident：直接返回已有记录（created=false）
-//   - 命中终态（RESOLVED/FAILED/CANCELLED）同指纹 Incident：视为告警复发，
-//     重开为 OPEN 进入新一轮告警周期（created=true）
+// 去重语义（同一 fingerprint 一次只允许一条非终态 Incident）：
+//   - 命中非终态同指纹 Incident：直接返回已有记录（created=false），同一告警周期内去重
+//   - 只有终态（RESOLVED/FAILED/CANCELLED）历史：视为告警复发，创建**新的** Incident
+//     （新 ID、新周期），不重开历史记录
 //
-// 返回创建后的 Incident 以及是否为新创建（false 表示命中活跃去重、返回已有记录）。
+// 返回创建后的 Incident 以及是否为新创建。
 func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.Incident, bool, error) {
 	if in.Service == "" {
 		return nil, false, fmt.Errorf("%w: service is required", ErrInvalidInput)
@@ -63,9 +80,9 @@ func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.In
 
 	fingerprint := model.Fingerprint(in.Service, in.AlertName, in.Title)
 
-	// 去重：同服务同告警（或同标题）视为同一次故障。
-	if existing, err := s.repo.GetByFingerprint(ctx, fingerprint); err == nil {
-		return s.dedupHit(ctx, existing, fingerprint)
+	// 去重：只命中活动（非终态）Incident。
+	if existing, err := s.repo.GetActiveByFingerprint(ctx, fingerprint); err == nil {
+		return existing, false, nil
 	} else if !errors.Is(err, repository.ErrNotFound) {
 		return nil, false, err
 	}
@@ -88,46 +105,20 @@ func (s *Service) Create(ctx context.Context, in CreateIncidentInput) (*model.In
 		inc.Severity = string(model.SeverityMedium)
 	}
 
-	if err := s.repo.Create(ctx, inc); err != nil {
-		// 并发去重兜底：fingerprint 唯一索引冲突说明已有人创建，
-		// 返回已有记录（created=false），避免高并发下重复 Incident。
+	// 与审计事件同事务写入：事件写失败则 Incident 不落库，接口报错后重试不会留下半截状态。
+	ev := model.NewIncidentEvent(inc.ID, model.EventIncidentCreated, "", model.StatusOpen, "alert firing", "")
+	if err := s.repo.CreateWithEvent(ctx, inc, ev); err != nil {
+		// 并发去重兜底：部分唯一索引冲突说明已有人创建了活动 Incident，
+		// 返回已有记录（created=false），避免高并发下同一告警周期出现两条。
 		if errors.Is(err, repository.ErrConflict) {
-			if existing, gerr := s.repo.GetByFingerprint(ctx, fingerprint); gerr == nil {
-				return s.dedupHit(ctx, existing, fingerprint)
+			if existing, gerr := s.repo.GetActiveByFingerprint(ctx, fingerprint); gerr == nil {
+				return existing, false, nil
 			}
 		}
 		return nil, false, err
 	}
 	metrics.IncidentsTotal.WithLabelValues(inc.Service, inc.Severity).Inc()
 	return inc, true, nil
-}
-
-// dedupHit 处理指纹命中的去重：
-//   - 非终态：直接返回（活跃告警周期内去重）
-//   - 终态：重开为 OPEN（告警复发，进入新一轮周期），返回 created=true
-//
-// 重开同样受乐观锁（version CAS）保护：并发重开冲突时读取最新记录返回，
-// 不会出现双写或状态回退。
-func (s *Service) dedupHit(ctx context.Context, existing *model.Incident, fingerprint string) (*model.Incident, bool, error) {
-	if !existing.Status.IsTerminal() {
-		return existing, false, nil
-	}
-
-	now := time.Now()
-	existing.Status = model.StatusOpen
-	existing.ResolvedAt = nil
-	existing.UpdatedAt = now
-	if err := s.repo.Update(ctx, existing); err != nil {
-		if errors.Is(err, repository.ErrConcurrentModification) {
-			// 并发重开冲突：其他人已重开，返回其最新记录。
-			if cur, gerr := s.repo.GetByFingerprint(ctx, fingerprint); gerr == nil {
-				return cur, true, nil
-			}
-		}
-		return nil, false, err
-	}
-	metrics.IncidentsTotal.WithLabelValues(existing.Service, existing.Severity).Inc()
-	return existing, true, nil
 }
 
 // Get 按 ID 查询 Incident。
@@ -141,19 +132,48 @@ func (s *Service) GetByFingerprint(ctx context.Context, fingerprint string) (*mo
 }
 
 // ResolveExternally 由外部告警恢复触发，直接关闭 Incident（绕过 Agent 审批/处置流程）。
+//
+//   - 处置尚未开始的活动 Incident：关闭它（只关闭最新活动记录）。
+//   - MITIGATING / VERIFYING：拒绝关闭，避免外部恢复与已取得执行权的处置互相覆盖。
+//   - 只有终态历史：幂等成功，返回最近一条历史记录且不做任何修改
+//     （调用方 internal/api/handler/alert.go 会读取返回记录的 Status，不能返回 nil）。
+//   - 完全没有该指纹的记录：返回 ErrNotFound（无从恢复，不伪造记录）。
 func (s *Service) ResolveExternally(ctx context.Context, fingerprint string) (*model.Incident, error) {
-	inc, err := s.repo.GetByFingerprint(ctx, fingerprint)
+	inc, err := s.repo.GetActiveByFingerprint(ctx, fingerprint)
+	if errors.Is(err, repository.ErrNotFound) {
+		latest, gerr := s.repo.GetByFingerprint(ctx, fingerprint)
+		if errors.Is(gerr, repository.ErrNotFound) {
+			return nil, fmt.Errorf("%w: no incident for fingerprint", repository.ErrNotFound)
+		}
+		if gerr != nil {
+			return nil, gerr
+		}
+		// 历史终态记录：幂等成功，不做修改。
+		return latest, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	if inc.Status.IsTerminal() {
-		return inc, nil
+	if inc.Status == model.StatusMitigating || inc.Status == model.StatusVerifying {
+		return nil, fmt.Errorf("%w: incident %s is %s", ErrInvalidTransition, inc.ID, inc.Status)
 	}
+
+	// 外部恢复顺序：先让该 Incident 的 PENDING 审批失效，再关闭 Incident。
+	// 反过来的话会留下"Incident 已恢复、审批仍可被批准"的窗口；任一步失败都返回错误，不关单。
+	if s.approvalExpirer != nil {
+		if _, err := s.approvalExpirer.ExpirePending(ctx, inc.ID); err != nil {
+			return nil, fmt.Errorf("expire pending approvals of %s: %w", inc.ID, err)
+		}
+	}
+
+	from := inc.Status
 	now := time.Now()
 	inc.Status = model.StatusResolved
 	inc.ResolvedAt = &now
 	inc.UpdatedAt = now
-	if err := s.repo.Update(ctx, inc); err != nil {
+	// 与审计事件同事务更新。
+	ev := model.NewIncidentEvent(inc.ID, model.EventStatusTransition, from, model.StatusResolved, "external alert resolved", "")
+	if err := s.repo.UpdateWithEvent(ctx, inc, ev); err != nil {
 		return nil, err
 	}
 	return inc, nil
@@ -166,12 +186,27 @@ func (s *Service) List(ctx context.Context, filter repository.ListFilter) ([]*mo
 
 // Transition 执行一次受状态机约束的状态迁移。
 func (s *Service) Transition(ctx context.Context, id string, to model.Status) (*model.Incident, error) {
+	return s.transition(ctx, id, to, "state machine transition", "")
+}
+
+// transition 执行状态迁移并写入事件；非法迁移不写事件。
+func (s *Service) transition(ctx context.Context, id string, to model.Status, reason, errMsg string) (*model.Incident, error) {
+	return s.transitionWithAudit(ctx, id, to, reason, errMsg, "", nil)
+}
+
+// MoveToWithAudit 原子写入状态迁移和一条业务审计事件。
+func (s *Service) MoveToWithAudit(ctx context.Context, id string, to model.Status, eventType string, payload map[string]any) (*model.Incident, error) {
+	return s.transitionWithAudit(ctx, id, to, "state machine transition", "", eventType, payload)
+}
+
+func (s *Service) transitionWithAudit(ctx context.Context, id string, to model.Status, reason, errMsg, eventType string, payload map[string]any) (*model.Incident, error) {
 	inc, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := state_machine.Transition(inc.Status, to); err != nil {
+	from := inc.Status
+	if err := state_machine.Transition(from, to); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidTransition, err)
 	}
 
@@ -182,13 +217,42 @@ func (s *Service) Transition(ctx context.Context, id string, to model.Status) (*
 		inc.ResolvedAt = &now
 	}
 
-	if err := s.repo.Update(ctx, inc); err != nil {
-		if errors.Is(err, repository.ErrConcurrentModification) {
+	// 与审计事件同事务更新：事件写失败则状态不落库，调用方可安全重试同一迁移。
+	statusEvent := model.NewIncidentEvent(inc.ID, model.EventStatusTransition, from, to, reason, errMsg)
+	var updateErr error
+	if eventType == "" {
+		updateErr = s.repo.UpdateWithEvent(ctx, inc, statusEvent)
+	} else {
+		auditPayload := make(map[string]any, len(payload)+2)
+		for key, value := range payload {
+			auditPayload[key] = value
+		}
+		auditPayload["from"] = string(from)
+		auditPayload["to"] = string(to)
+		auditEvent := model.NewAuditEvent(inc.ID, eventType, auditPayload)
+		updateErr = s.repo.UpdateWithEvents(ctx, inc, []*model.IncidentEvent{statusEvent, auditEvent})
+	}
+	if updateErr != nil {
+		if errors.Is(updateErr, repository.ErrConcurrentModification) {
 			return nil, fmt.Errorf("%w: incident %s", ErrConcurrentModification, id)
 		}
-		return nil, err
+		return nil, updateErr
 	}
 	return inc, nil
+}
+
+// Fail 将 Incident 置为 FAILED 并把原因写入终态事件。
+// 供消费重试耗尽等终态回调使用（OPEN/INVESTIGATING/WAITING_APPROVAL/MITIGATING/VERIFYING -> FAILED）。
+func (s *Service) Fail(ctx context.Context, id, reason, errMsg string) (*model.Incident, error) {
+	return s.transition(ctx, id, model.StatusFailed, reason, errMsg)
+}
+
+// ListEvents 返回某个 Incident 的生命周期事件（时间正序）。父资源不存在返回 ErrNotFound。
+func (s *Service) ListEvents(ctx context.Context, incidentID string) ([]*model.IncidentEvent, error) {
+	if _, err := s.repo.GetByID(ctx, incidentID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListEvents(ctx, incidentID)
 }
 
 // MoveTo 执行一次受严格状态机约束的状态迁移（v1.1 状态闭环）。

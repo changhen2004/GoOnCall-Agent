@@ -83,8 +83,304 @@ func TestCreate_Validation(t *testing.T) {
 	}
 }
 
+// TestCreate_NewIncidentAfterTerminal 验证告警复发（前一轮已终态）创建的是新 Incident：
+// ID 不同、旧记录保持终态不被重开。
+func TestCreate_NewIncidentAfterTerminal(t *testing.T) {
+	ctx := context.Background()
+	svc := newService()
+
+	first, created, err := svc.Create(ctx, CreateIncidentInput{
+		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err",
+	})
+	if err != nil || !created {
+		t.Fatalf("first Create() = (%v, %v), err=%v", first.ID, created, err)
+	}
+	// 外部恢复：Alertmanager resolved 通知直接关闭 Incident。
+	resolvedInc, err := svc.ResolveExternally(ctx, first.Fingerprint)
+	if err != nil {
+		t.Fatalf("ResolveExternally() error = %v", err)
+	}
+	if resolvedInc.Status != model.StatusResolved {
+		t.Fatalf("resolved status = %s, want RESOLVED", resolvedInc.Status)
+	}
+
+	// 告警复发：同一指纹再次 firing，必须开新 Incident（新告警周期）。
+	second, created2, err := svc.Create(ctx, CreateIncidentInput{
+		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err again",
+	})
+	if err != nil {
+		t.Fatalf("second Create() error = %v", err)
+	}
+	if !created2 {
+		t.Fatal("second Create() created = false, want true (new cycle)")
+	}
+	if second.ID == first.ID {
+		t.Errorf("recurrence returned same incident %s, want a new ID", first.ID)
+	}
+	if second.Status != model.StatusOpen {
+		t.Errorf("new incident status = %s, want OPEN", second.Status)
+	}
+	if second.ResolvedAt != nil {
+		t.Error("new incident resolved_at should be nil")
+	}
+
+	// 旧记录未被改动：仍是终态，版本号未变。
+	old, err := svc.Get(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("Get(first) error = %v", err)
+	}
+	if old.Status != model.StatusResolved || old.ResolvedAt == nil {
+		t.Errorf("old incident = %s resolved_at=%v, want RESOLVED with timestamp", old.Status, old.ResolvedAt)
+	}
+	if old.Version != resolvedInc.Version {
+		t.Errorf("old incident version = %d, want unchanged %d", old.Version, resolvedInc.Version)
+	}
+
+	// 同一周期内再次 firing 仍然去重到新记录。
+	third, created3, err := svc.Create(ctx, CreateIncidentInput{
+		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err again",
+	})
+	if err != nil || created3 {
+		t.Fatalf("third Create() = (%v, created=%v), want dedup on the new cycle", third, created3)
+	}
+	if third.ID != second.ID {
+		t.Errorf("dedup returned %s, want %s", third.ID, second.ID)
+	}
+}
+
+func TestResolveExternally_IdempotentWithoutActiveIncident(t *testing.T) {
+	ctx := context.Background()
+	svc := newService()
+
+	// 完全没有该指纹的记录：无从恢复，返回 ErrNotFound（不伪造记录）。
+	if inc, err := svc.ResolveExternally(ctx, "fp-unknown"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResolveExternally(unknown) = (%+v, %v), want ErrNotFound", inc, err)
+	}
+
+	// 已终态：幂等成功，返回最近一条历史记录且不修改它。
+	first, _, err := svc.Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "a", Title: "t"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	resolved, err := svc.ResolveExternally(ctx, first.Fingerprint)
+	if err != nil {
+		t.Fatalf("ResolveExternally() error = %v", err)
+	}
+	again, err := svc.ResolveExternally(ctx, first.Fingerprint)
+	if err != nil {
+		t.Fatalf("ResolveExternally(terminal) error = %v, want nil", err)
+	}
+	if again == nil || again.ID != first.ID {
+		t.Fatalf("ResolveExternally(terminal) = %+v, want the historical record %s", again, first.ID)
+	}
+	if again.Status != model.StatusResolved {
+		t.Errorf("returned status = %s, want RESOLVED", again.Status)
+	}
+	old, err := svc.Get(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if old.Version != resolved.Version {
+		t.Errorf("terminal incident version changed: %d -> %d", resolved.Version, old.Version)
+	}
+}
+
+// TestResolveExternally_DoesNotCloseExecutionInProgress 处置已取得执行权后，resolved webhook
+// 不能抢先关单；Alertmanager 可在处置结束后重试。
+func TestResolveExternally_DoesNotCloseExecutionInProgress(t *testing.T) {
+	for _, status := range []model.Status{model.StatusMitigating, model.StatusVerifying} {
+		t.Run(string(status), func(t *testing.T) {
+			repo := repository.NewMemory()
+			svc := New(repo)
+			inc, _, err := svc.Create(context.Background(), CreateIncidentInput{Service: "svc", Title: string(status)})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			for _, next := range []model.Status{model.StatusInvestigating, model.StatusWaitingApproval, model.StatusMitigating, model.StatusVerifying} {
+				if next == model.StatusVerifying && status == model.StatusMitigating {
+					break
+				}
+				if _, err := svc.MoveTo(context.Background(), inc.ID, next); err != nil {
+					t.Fatalf("MoveTo(%s) error = %v", next, err)
+				}
+				if next == status {
+					break
+				}
+			}
+
+			if _, err := svc.ResolveExternally(context.Background(), inc.Fingerprint); !errors.Is(err, ErrInvalidTransition) {
+				t.Fatalf("ResolveExternally() error = %v, want ErrInvalidTransition", err)
+			}
+			got, _ := svc.Get(context.Background(), inc.ID)
+			if got.Status != status {
+				t.Fatalf("status = %s, want %s", got.Status, status)
+			}
+		})
+	}
+}
+
+func TestTransition_WritesEvents(t *testing.T) {
+	ctx := context.Background()
+	svc := New(repository.NewMemory())
+
+	inc, _, err := svc.Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "a", Title: "t"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := svc.Analyze(ctx, inc.ID); err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	// 非法迁移：不写事件、必须报错。
+	if _, err := svc.Resolve(ctx, inc.ID); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("Resolve(INVESTIGATING) error = %v, want ErrInvalidTransition", err)
+	}
+	if _, err := svc.Fail(ctx, inc.ID, "diagnosis failed", "llm timeout"); err != nil {
+		t.Fatalf("Fail() error = %v", err)
+	}
+
+	got, err := svc.ListEvents(ctx, inc.ID)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	// 创建 + OPEN->INVESTIGATING + INVESTIGATING->FAILED，非法迁移不计入。
+	if len(got) != 3 {
+		t.Fatalf("events = %d, want 3", len(got))
+	}
+	type want struct {
+		eventType  string
+		from, to   model.Status
+		reasonText string
+	}
+	wants := []want{
+		{model.EventIncidentCreated, "", model.StatusOpen, "alert firing"},
+		{model.EventStatusTransition, model.StatusOpen, model.StatusInvestigating, "state machine transition"},
+		{model.EventStatusTransition, model.StatusInvestigating, model.StatusFailed, "diagnosis failed"},
+	}
+	for i, w := range wants {
+		if got[i].EventType != w.eventType {
+			t.Errorf("event[%d].type = %s, want %s", i, got[i].EventType, w.eventType)
+		}
+		from, to := got[i].StatusChange()
+		if from != w.from || to != w.to {
+			t.Errorf("event[%d] = %s -> %s, want %s -> %s", i, from, to, w.from, w.to)
+		}
+		if got[i].ReasonText() != w.reasonText {
+			t.Errorf("event[%d].reason = %q, want %q", i, got[i].ReasonText(), w.reasonText)
+		}
+		if got[i].CreatedAt.IsZero() {
+			t.Errorf("event[%d].created_at is zero", i)
+		}
+	}
+	// 终态事件必须带上错误原因。
+	if got[2].Payload["error"] != "llm timeout" {
+		t.Errorf("event[2].error = %v, want llm timeout", got[2].Payload["error"])
+	}
+}
+
+// failingEventRepo 让"事件写入"失败：CreateWithEvent/UpdateWithEvent 不落库并返回错误，
+// 其余读写委托给 Memory。用于确认 Service 始终走原子写路径，不会在事件失败时留下半截状态。
+type failingEventRepo struct {
+	*repository.Memory
+	atomicCalls int
+}
+
+func (f *failingEventRepo) CreateWithEvent(ctx context.Context, inc *model.Incident, ev *model.IncidentEvent) error {
+	f.atomicCalls++
+	if ev == nil {
+		return errors.New("event must be written atomically with the incident")
+	}
+	return errors.New("event write failed")
+}
+
+func (f *failingEventRepo) UpdateWithEvent(ctx context.Context, inc *model.Incident, ev *model.IncidentEvent) error {
+	f.atomicCalls++
+	if ev == nil {
+		return errors.New("event must be written atomically with the incident")
+	}
+	return errors.New("event write failed")
+}
+
+// TestService_EventWriteFailureLeavesNoPartialState 覆盖"事件写失败必须整体回滚"：
+// 接口返回错误，且 Incident 不能被创建、状态不能被改动。
+func TestService_EventWriteFailureLeavesNoPartialState(t *testing.T) {
+	ctx := context.Background()
+	repo := &failingEventRepo{Memory: repository.NewMemory()}
+	svc := New(repo)
+
+	if _, _, err := svc.Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "a", Title: "t"}); err == nil {
+		t.Fatal("Create() error = nil, want event write error")
+	}
+	if repo.atomicCalls == 0 {
+		t.Fatal("Create() 没有走原子写路径（CreateWithEvent）")
+	}
+	list, err := svc.List(ctx, repository.ListFilter{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("incidents = %d, want 0（事件写失败不能留下 Incident）", len(list))
+	}
+
+	// 正常创建一条，再让迁移时的事件写入失败：状态与 version 必须不变。
+	ok := repository.NewMemory()
+	inc, _, err := New(ok).Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "b", Title: "t"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	before, err := ok.GetByID(ctx, inc.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+
+	failing := &failingEventRepo{Memory: ok}
+	if _, err := New(failing).Analyze(ctx, inc.ID); err == nil {
+		t.Fatal("Analyze() error = nil, want event write error")
+	}
+	if failing.atomicCalls == 0 {
+		t.Fatal("Analyze() 没有走原子写路径（UpdateWithEvent）")
+	}
+	after, err := ok.GetByID(ctx, inc.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if after.Status != before.Status || after.Version != before.Version {
+		t.Fatalf("status after failed transition = %s v%d, want unchanged %s v%d", after.Status, after.Version, before.Status, before.Version)
+	}
+}
+
+func TestResolveExternally_WritesEvent(t *testing.T) {
+	ctx := context.Background()
+	svc := New(repository.NewMemory())
+
+	inc, _, err := svc.Create(ctx, CreateIncidentInput{Service: "svc", AlertName: "a", Title: "t"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := svc.Analyze(ctx, inc.ID); err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if _, err := svc.ResolveExternally(ctx, inc.Fingerprint); err != nil {
+		t.Fatalf("ResolveExternally() error = %v", err)
+	}
+
+	got, err := svc.ListEvents(ctx, inc.ID)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("events = %d, want 3", len(got))
+	}
+	from, to := got[2].StatusChange()
+	if from != model.StatusInvestigating || to != model.StatusResolved {
+		t.Errorf("last event = %s -> %s, want INVESTIGATING -> RESOLVED", from, to)
+	}
+	if got[2].ReasonText() != "external alert resolved" {
+		t.Errorf("reason = %q", got[2].ReasonText())
+	}
+}
+
 // TestCreate_ConcurrentDedup 验证高并发创建同一指纹 Incident 时只落库一条：
-// 一个请求 created=true，另一个命中去重（检查命中或唯一约束冲突兜底）返回同一记录。
+// 一个请求 created=true，其余命中去重（检查命中或唯一约束冲突兜底）返回同一记录。
 func TestCreate_ConcurrentDedup(t *testing.T) {
 	svc := newService()
 	start := make(chan struct{})
@@ -93,9 +389,10 @@ func TestCreate_ConcurrentDedup(t *testing.T) {
 		created bool
 		err     error
 	}
-	results := make(chan result, 2)
+	const workers = 20
+	results := make(chan result, workers)
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -139,46 +436,6 @@ func TestCreate_ConcurrentDedup(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Fatalf("incidents stored = %d, want 1 (dedup)", len(list))
-	}
-}
-
-func TestCreate_ReopenResolvedIncident(t *testing.T) {
-	ctx := context.Background()
-	svc := newService()
-
-	first, created, err := svc.Create(ctx, CreateIncidentInput{
-		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err",
-	})
-	if err != nil || !created {
-		t.Fatalf("first Create() = (%v, %v), err=%v", first.ID, created, err)
-	}
-	// 外部恢复：Alertmanager resolved 通知直接关闭 Incident。
-	resolvedInc, err := svc.ResolveExternally(ctx, first.Fingerprint)
-	if err != nil {
-		t.Fatalf("ResolveExternally() error = %v", err)
-	}
-
-	// 告警复发：同一指纹再次 firing，应重开为 OPEN 而非去重忽略。
-	second, created2, err := svc.Create(ctx, CreateIncidentInput{
-		Service: "gocommunity", AlertName: "HighErrorRate", Title: "err again",
-	})
-	if err != nil {
-		t.Fatalf("second Create() error = %v", err)
-	}
-	if !created2 {
-		t.Fatal("second Create() created = false, want true (reopen on recurrence)")
-	}
-	if second.ID != first.ID {
-		t.Errorf("reopen returned %s, want same incident %s", second.ID, first.ID)
-	}
-	if second.Status != model.StatusOpen {
-		t.Errorf("reopened status = %s, want OPEN", second.Status)
-	}
-	if second.ResolvedAt != nil {
-		t.Error("reopened incident resolved_at should be cleared")
-	}
-	if second.Version != resolvedInc.Version+1 {
-		t.Errorf("reopened version = %d, want %d (CAS bump)", second.Version, resolvedInc.Version+1)
 	}
 }
 

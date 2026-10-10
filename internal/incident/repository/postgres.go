@@ -20,11 +20,6 @@ func NewPostgres(db *gorm.DB) *Postgres {
 	return &Postgres{db: db}
 }
 
-// AutoMigrate 自动建表（开发便捷；生产环境使用 migrations/）。
-func (p *Postgres) AutoMigrate() error {
-	return p.db.AutoMigrate(&model.Incident{})
-}
-
 // Create 插入 Incident。fingerprint 唯一索引冲突（并发去重竞态）
 // 映射为 ErrConflict，由上层按"已存在"处理。
 func (p *Postgres) Create(ctx context.Context, inc *model.Incident) error {
@@ -68,6 +63,22 @@ func (p *Postgres) GetByFingerprint(ctx context.Context, fingerprint string) (*m
 	return &inc, nil
 }
 
+// GetActiveByFingerprint 返回该指纹当前唯一的非终态 Incident（部分唯一索引保证至多一条）。
+func (p *Postgres) GetActiveByFingerprint(ctx context.Context, fingerprint string) (*model.Incident, error) {
+	var inc model.Incident
+	err := p.db.WithContext(ctx).
+		Where("fingerprint = ? AND "+activeIncidentPredicate, fingerprint).
+		Order("created_at DESC").
+		First(&inc).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
 func (p *Postgres) List(ctx context.Context, filter ListFilter) ([]*model.Incident, error) {
 	q := p.db.WithContext(ctx).Model(&model.Incident{})
 	if filter.Service != "" {
@@ -95,7 +106,17 @@ func (p *Postgres) List(ctx context.Context, filter ListFilter) ([]*model.Incide
 // 仅当数据库中 version 与传入值一致时更新（version 自增 1），
 // 否则返回 ErrConcurrentModification（RowsAffected == 0）。
 func (p *Postgres) Update(ctx context.Context, inc *model.Incident) error {
-	res := p.db.WithContext(ctx).
+	if err := p.updateIncident(p.db.WithContext(ctx), inc); err != nil {
+		return err
+	}
+	inc.Version++
+	return nil
+}
+
+// updateIncident 执行 version CAS 更新，不修改 inc.Version
+// （调用方确认提交成功后再自增，避免事务回滚后内存版本与数据库不一致）。
+func (p *Postgres) updateIncident(tx *gorm.DB, inc *model.Incident) error {
+	res := tx.
 		Model(&model.Incident{}).
 		Where("id = ? AND version = ?", inc.ID, inc.Version).
 		Updates(map[string]any{
@@ -110,6 +131,5 @@ func (p *Postgres) Update(ctx context.Context, inc *model.Incident) error {
 	if res.RowsAffected == 0 {
 		return ErrConcurrentModification
 	}
-	inc.Version++
 	return nil
 }

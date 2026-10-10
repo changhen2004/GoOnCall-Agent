@@ -12,9 +12,12 @@ import (
 // transitions 是 v1.1 严格状态迁移表。
 // 只允许主流程：OPEN -> INVESTIGATING -> WAITING_APPROVAL -> MITIGATING -> VERIFYING -> RESOLVED。
 // 明确禁止 INVESTIGATING -> RESOLVED（必须经过审批、处置与验证）。
+//
+// 诊断阶段（OPEN/INVESTIGATING）允许直接 FAILED：消息重试耗尽、诊断 Run 终止失败时
+// 必须能把 Incident 落到终态（见 incident.Service.Fail），否则告警会永久停在非终态。
 var transitions = map[model.Status][]model.Status{
-	model.StatusOpen:            {model.StatusInvestigating},
-	model.StatusInvestigating:   {model.StatusWaitingApproval},
+	model.StatusOpen:            {model.StatusInvestigating, model.StatusFailed},
+	model.StatusInvestigating:   {model.StatusWaitingApproval, model.StatusFailed},
 	model.StatusWaitingApproval: {model.StatusMitigating, model.StatusFailed},
 	model.StatusMitigating:      {model.StatusVerifying, model.StatusFailed},
 	model.StatusVerifying:       {model.StatusResolved, model.StatusFailed},

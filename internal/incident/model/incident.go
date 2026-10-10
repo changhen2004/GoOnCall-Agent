@@ -47,13 +47,18 @@ const (
 
 // Incident 是一次服务故障事件。
 type Incident struct {
-	ID          string     `json:"id" gorm:"primaryKey;type:varchar(64)"`
-	Service     string     `json:"service" gorm:"type:varchar(128);not null;index:idx_incident_service"`
-	Severity    string     `json:"severity" gorm:"type:varchar(16);not null"`
-	Title       string     `json:"title" gorm:"type:varchar(255);not null"`
-	Description string     `json:"description" gorm:"type:text"`
-	AlertName   string     `json:"alert_name" gorm:"type:varchar(255)"`
-	Fingerprint string     `json:"fingerprint" gorm:"type:varchar(128);uniqueIndex:idx_incident_fingerprint"`
+	ID          string `json:"id" gorm:"primaryKey;type:varchar(64)"`
+	Service     string `json:"service" gorm:"type:varchar(128);not null;index:idx_incident_service"`
+	Severity    string `json:"severity" gorm:"type:varchar(16);not null"`
+	Title       string `json:"title" gorm:"type:varchar(255);not null"`
+	Description string `json:"description" gorm:"type:text"`
+	AlertName   string `json:"alert_name" gorm:"type:varchar(255)"`
+	// Fingerprint 的去重唯一性只作用于非终态：同一告警周期只能有一条活动 Incident，
+	// 终态（RESOLVED/FAILED/CANCELLED）之后同指纹复发必须能创建新 Incident。
+	//
+	// WHERE 谓词写成 <> 串联而非 NOT IN (...)，因为 GORM 索引标签以逗号分隔参数，
+	// 谓词里的逗号会被截断（schema.parseFieldIndexes）。与 migrations/000004 保持一致。
+	Fingerprint string     `json:"fingerprint" gorm:"type:varchar(128);uniqueIndex:idx_incident_active_fingerprint,where:status <> 'RESOLVED' AND status <> 'FAILED' AND status <> 'CANCELLED'"`
 	Status      Status     `json:"status" gorm:"type:varchar(32);not null;index:idx_incident_status"`
 	StartedAt   time.Time  `json:"started_at" gorm:"not null"`
 	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
