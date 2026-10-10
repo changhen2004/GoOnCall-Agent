@@ -147,6 +147,22 @@ func (h *IncidentHandler) Resolve(c *gin.Context) {
 	c.JSON(http.StatusOK, dto.ToIncidentResponse(inc))
 }
 
+// Events 处理 GET /api/v1/incidents/:id/events（按 CreatedAt 正序）。
+//
+// 生产闭环依赖这个持久化查询（重启后仍可读），不依赖内存 SSE。
+// Incident 不存在时返回 404，空集合返回 []。
+func (h *IncidentHandler) Events(c *gin.Context) {
+	events, err := h.service.ListEvents(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if events == nil {
+		events = []*model.IncidentEvent{}
+	}
+	c.JSON(http.StatusOK, events)
+}
+
 func parseIntDefault(s string, def int) int {
 	if s == "" {
 		return def

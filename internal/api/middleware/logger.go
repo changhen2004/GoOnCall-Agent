@@ -1,4 +1,4 @@
-// Package middleware 提供 Gin 中间件。
+// Package middleware 提供 Gin 中间件：结构化请求日志与三类最小认证。
 package middleware
 
 import (
