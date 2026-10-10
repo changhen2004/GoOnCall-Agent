@@ -68,3 +68,16 @@ func cloneHeaders(h amqp.Table) amqp.Table {
 	}
 	return out
 }
+
+// failedMessageRoute 决定失败消息本次的去向与重试计数（纯决策，不依赖 broker）。
+//
+// toDLQ 为 true 表示重试已耗尽：调用方必须先把消息确认进 DLQ，再执行终态回调。
+func failedMessageRoute(headers amqp.Table) (routingKey string, nextHeaders amqp.Table, toDLQ bool) {
+	retries := retryCount(headers)
+	key, next, toRetry := retryDecision(retries)
+	if toRetry {
+		headers = cloneHeaders(headers)
+		headers[RetryCountHeader] = int32(next)
+	}
+	return key, headers, !toRetry
+}
