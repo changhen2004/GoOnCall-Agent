@@ -1,4 +1,4 @@
-// Package retriever 提供混合检索：词法 + 向量，RRF 融合。
+// Package retriever 提供混合检索：BM25 + 向量，RRF 融合。
 package retriever
 
 import (
@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -30,7 +32,7 @@ type Retriever interface {
 	Retrieve(ctx context.Context, query string, topK int) ([]Result, error)
 }
 
-// Hybrid 是混合检索器（词法 + 向量，RRF 融合）。
+// Hybrid 是混合检索器（BM25 + 向量，RRF 融合）。
 type Hybrid struct {
 	chunks     []*kmodel.Chunk
 	embedder   embedding.Embedder
@@ -112,7 +114,7 @@ func (h *Hybrid) Retrieve(ctx context.Context, query string, topK int) ([]Result
 	}
 
 	ranks := make(map[string][]int)
-	for id, r := range lexicalRanks(query, h.chunks) {
+	for id, r := range bm25Ranks(query, h.chunks) {
 		ranks[id] = append(ranks[id], r)
 	}
 	// 向量检索候选集至少覆盖请求的 topK，避免 RRF 后结果不足。
@@ -196,20 +198,69 @@ func (h *Hybrid) vectorRanks(ctx context.Context, query string, k int) (map[stri
 	return ranks, nil
 }
 
-// lexicalRanks 词法打分并转为 1-based 排名。
-func lexicalRanks(query string, chunks []*kmodel.Chunk) map[string]int {
-	tokens := tokenize(query)
+// bm25Ranks 使用 Okapi BM25 进行词法打分，并转为 1-based 排名。
+func bm25Ranks(query string, chunks []*kmodel.Chunk) map[string]int {
+	queryTerms := uniqueTerms(tokenize(query))
+	if len(queryTerms) == 0 || len(chunks) == 0 {
+		return map[string]int{}
+	}
+
+	type document struct {
+		id        string
+		termFreq  map[string]int
+		termCount int
+	}
+	documents := make([]document, 0, len(chunks))
+	docFreq := make(map[string]int)
+	totalTerms := 0
+	for _, chunk := range chunks {
+		terms := tokenize(chunk.Title + "\n" + chunk.Content)
+		termFreq := make(map[string]int, len(terms))
+		for _, term := range terms {
+			termFreq[term]++
+		}
+		for term := range termFreq {
+			docFreq[term]++
+		}
+		documents = append(documents, document{id: chunk.ID, termFreq: termFreq, termCount: len(terms)})
+		totalTerms += len(terms)
+	}
+	if totalTerms == 0 {
+		return map[string]int{}
+	}
+	averageLength := float64(totalTerms) / float64(len(documents))
+
+	const (
+		k1 = 1.2
+		b  = 0.75
+	)
 	type scored struct {
 		id    string
 		score float64
 	}
-	items := make([]scored, 0, len(chunks))
-	for _, c := range chunks {
-		if s := lexicalScore(tokens, c.Content); s > 0 {
-			items = append(items, scored{id: c.ID, score: s})
+	items := make([]scored, 0, len(documents))
+	for _, document := range documents {
+		score := 0.0
+		for _, term := range queryTerms {
+			frequency := float64(document.termFreq[term])
+			if frequency == 0 {
+				continue
+			}
+			documentFrequency := float64(docFreq[term])
+			idf := math.Log(1 + (float64(len(documents))-documentFrequency+0.5)/(documentFrequency+0.5))
+			lengthRatio := float64(document.termCount) / averageLength
+			score += idf * frequency * (k1 + 1) / (frequency + k1*(1-b+b*lengthRatio))
+		}
+		if score > 0 {
+			items = append(items, scored{id: document.id, score: score})
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].score > items[j].score })
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].score == items[j].score {
+			return items[i].id < items[j].id
+		}
+		return items[i].score > items[j].score
+	})
 
 	ranks := make(map[string]int, len(items))
 	for i, it := range items {
@@ -230,26 +281,48 @@ func rrfScores(ranks map[string][]int, k int) map[string]float64 {
 }
 
 func tokenize(s string) []string {
-	fields := strings.Fields(strings.ToLower(s))
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		if len(f) >= 2 {
-			out = append(out, f)
+	var (
+		out      []string
+		word     []rune
+		previous rune
+		hasHan   bool
+	)
+	flushWord := func() {
+		if len(word) > 0 {
+			out = append(out, string(word))
+			word = word[:0]
 		}
 	}
+	for _, r := range strings.ToLower(s) {
+		if unicode.Is(unicode.Han, r) {
+			flushWord()
+			out = append(out, string(r))
+			if hasHan {
+				out = append(out, string([]rune{previous, r}))
+			}
+			previous, hasHan = r, true
+			continue
+		}
+		hasHan = false
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			word = append(word, r)
+			continue
+		}
+		flushWord()
+	}
+	flushWord()
 	return out
 }
 
-func lexicalScore(tokens []string, content string) float64 {
-	if len(tokens) == 0 {
-		return 0
-	}
-	lower := strings.ToLower(content)
-	hits := 0
-	for _, tok := range tokens {
-		if strings.Contains(lower, tok) {
-			hits++
+func uniqueTerms(terms []string) []string {
+	seen := make(map[string]struct{}, len(terms))
+	unique := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if _, ok := seen[term]; ok {
+			continue
 		}
+		seen[term] = struct{}{}
+		unique = append(unique, term)
 	}
-	return float64(hits) / float64(len(tokens))
+	return unique
 }

@@ -13,7 +13,7 @@ GoOnCall Agent 把运维告警处理做成一条可审计的自动链路。Alert
 - **Incident 生命周期**：告警 webhook 创建 / 关闭工单；创建后自动发布 `agent.requested`（告警即诊断）；同一指纹只允许一条非终态 Incident，终态后复发创建**新的** Incident（新周期、新 ID）；状态迁移由 `version` 乐观锁与严格状态机保护，冲突返回 409。
 - **ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 `LLM_MODEL` 时不装配诊断 Agent（`analyze` 仅做状态流转）。
 - **工具集**（按配置启用）：`prometheus_query`、`prometheus_alerts`、`prometheus_range_query`、`rabbitmq_inspect`、`runbook_search`、`incident_history`、`worker_restart`。
-- **RAG 混合检索**：Markdown 加载 → 标题 / 段落 / 句子递归分块（按 Unicode 字符计数）→ Embedding → Qdrant → 词法 + 向量混合检索（RRF 融合）；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。缺少 embedding 服务 / 模型 / Qdrant 地址，或连接、索引失败时直接报错，不降级；内存向量库仅用于单元测试。
+- **RAG 混合检索**：Markdown 加载 → 标题 / 段落 / 句子递归分块（按 Unicode 字符计数）→ Embedding → Qdrant → BM25 + 向量混合检索（RRF 融合）；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。缺少 embedding 服务 / 模型 / Qdrant 地址，或连接、索引失败时直接报错，不降级；内存向量库仅用于单元测试。
 - **Run 记录与实时事件**：AgentRun / Step / ToolCall 持久化，任一关键审计写入失败都会让本轮诊断失败而非静默成功；同一 Incident 已有活动 Run 时，重复消息直接成功确认，不按时间阈值抢占执行。SSE 推送 Run / Step / Tool 事件；支持 `max_steps`、`max_tool_calls`、整轮诊断超时与单次工具超时。
 - **HITL 人工审批**：风险策略判定 → 审批（批准 / 拒绝）→ 批准后执行。执行权通过数据库条件更新（CAS）获得：`PENDING → APPROVED → EXECUTING → EXECUTED/FAILED/UNKNOWN`，并发或重复批准返回 409 且不会二次执行；`EXPIRED` 表示 Incident 已外部恢复或不再允许执行，`UNKNOWN` 表示外部动作结果未知，两者都需要人工核对，不自动重试。
 - **处置与连续验证**：审批通过 → 执行 `worker_restart`（`execution.mode=mock` 为模拟执行；`mode=http` 调用固定 URL 的 HTTP 适配器，带 Bearer Token 与 `Idempotency-Key: <approval_id>`，target 受白名单限制）→ **连续**验证 `required_successes` 次全部通过才 `RESOLVED` 并生成 Postmortem；采集错误、空结果、`NaN`/`Inf`、验证失败一律进 `FAILED`，绝不按 0 处理。

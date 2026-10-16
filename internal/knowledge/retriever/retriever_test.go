@@ -183,6 +183,36 @@ func TestRRFScores(t *testing.T) {
 	}
 }
 
+func TestBM25RanksPrefersSpecificMatch(t *testing.T) {
+	chunks := []*kmodel.Chunk{
+		{ID: "generic", Title: "队列检查", Content: "检查队列状态和消费者状态"},
+		{ID: "backlog", Title: "队列积压", Content: "RabbitMQ 消费者掉线导致队列积压"},
+	}
+
+	ranks := bm25Ranks("队列积压", chunks)
+	if ranks["backlog"] != 1 {
+		t.Fatalf("backlog rank = %d, want 1; ranks = %v", ranks["backlog"], ranks)
+	}
+	if ranks["generic"] <= ranks["backlog"] {
+		t.Fatalf("specific match should outrank generic match: %v", ranks)
+	}
+}
+
+func TestTokenizeSupportsChineseWithoutSpaces(t *testing.T) {
+	terms := uniqueTerms(tokenize("PostgreSQL连接池耗尽"))
+	want := map[string]bool{"postgresql": false, "连接": false, "接池": false, "池耗": false, "耗尽": false}
+	for _, term := range terms {
+		if _, ok := want[term]; ok {
+			want[term] = true
+		}
+	}
+	for term, found := range want {
+		if !found {
+			t.Fatalf("tokenize missing %q: %v", term, terms)
+		}
+	}
+}
+
 // recordingStore 记录每次 Search 的 topK，用于断言向量检索候选集被限制。
 type recordingStore struct {
 	mem   *vectorstore.Memory
