@@ -1,0 +1,60 @@
+{"query_id":"rmq_backlog_01","query":"RabbitMQ messages_ready 持续上涨，消息处理越来越慢","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.queue_backlog"],"reviewed":true}
+{"query_id":"rmq_backlog_02","query":"队列积压但消费者还在线，应该检查什么","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.queue_backlog"],"reviewed":true}
+{"query_id":"rmq_backlog_03","query":"publish rate 高于 deliver ack rate","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.queue_backlog"],"reviewed":true}
+{"query_id":"rmq_backlog_04","query":"异步任务延迟增加，RabbitMQ ready 消息不下降","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.queue_backlog"],"reviewed":true}
+{"query_id":"rmq_consumer_01","query":"RabbitMQ consumer count 从 8 降到 2","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.consumer_count_dropped"],"reviewed":true}
+{"query_id":"rmq_consumer_02","query":"队列消费者数量变成零但 broker 正常","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.consumer_count_dropped"],"reviewed":true}
+{"query_id":"rmq_consumer_03","query":"worker 发布后没有恢复订阅队列","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.consumer_count_dropped"],"reviewed":true}
+{"query_id":"rmq_consumer_04","query":"消费者部署健康但 queue consumer 数量不足","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.consumer_count_dropped"],"reviewed":true}
+{"query_id":"rmq_conn_01","query":"RabbitMQ connection refused","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.connection_failure"],"reviewed":true}
+{"query_id":"rmq_conn_02","query":"AMQP 客户端不断重连并出现 heartbeat timeout","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.connection_failure"],"reviewed":true}
+{"query_id":"rmq_conn_03","query":"RabbitMQ TLS handshake failed after certificate update","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.connection_failure"],"reviewed":true}
+{"query_id":"rmq_conn_04","query":"客户端登录 vhost 提示 authentication failed","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.connection_failure"],"reviewed":true}
+{"query_id":"rmq_alarm_01","query":"RabbitMQ memory alarm 导致 publisher blocked","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.resource_alarm"],"reviewed":true}
+{"query_id":"rmq_alarm_02","query":"broker 磁盘剩余空间不足，发布连接被阻塞","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.resource_alarm"],"reviewed":true}
+{"query_id":"rmq_alarm_03","query":"容器内 RabbitMQ 内存水位频繁触发","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.resource_alarm"],"reviewed":true}
+{"query_id":"rmq_alarm_04","query":"disk_free_limit alarm 如何安全处理","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.resource_alarm"],"reviewed":true}
+{"query_id":"rmq_route_01","query":"publisher confirm 成功但队列没有收到消息","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.unroutable_publish"],"reviewed":true}
+{"query_id":"rmq_route_02","query":"RabbitMQ unroutable dropped messages 指标上涨","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.unroutable_publish"],"reviewed":true}
+{"query_id":"rmq_route_03","query":"mandatory publish 收到 basic.return","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.unroutable_publish"],"reviewed":true}
+{"query_id":"rmq_route_04","query":"exchange 有消息流入但 routing key 没有绑定到队列","component":"rabbitmq","relevant_doc_ids":["runbook.rabbitmq.unroutable_publish"],"reviewed":true}
+{"query_id":"k8s_crash_01","query":"Pod 一直 CrashLoopBackOff","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_crashloopbackoff"],"reviewed":true}
+{"query_id":"k8s_crash_02","query":"容器反复重启，Last State Exit Code 1","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_crashloopbackoff"],"reviewed":true}
+{"query_id":"k8s_crash_03","query":"新版本 Pod 启动后马上退出","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_crashloopbackoff"],"reviewed":true}
+{"query_id":"k8s_crash_04","query":"liveness probe failed 导致容器循环重启","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_crashloopbackoff"],"reviewed":true}
+{"query_id":"k8s_pending_01","query":"Kubernetes Pod 长时间 Pending","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_pending"],"reviewed":true}
+{"query_id":"k8s_pending_02","query":"FailedScheduling insufficient cpu","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_pending"],"reviewed":true}
+{"query_id":"k8s_pending_03","query":"Pod 因 taint 和 node selector 无法调度","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_pending"],"reviewed":true}
+{"query_id":"k8s_pending_04","query":"PVC 未绑定导致 Pod 一直等待","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.pod_pending"],"reviewed":true}
+{"query_id":"k8s_node_01","query":"Kubernetes Node NotReady 超过十五分钟","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.node_not_ready"],"reviewed":true}
+{"query_id":"k8s_node_02","query":"节点 kubelet 停止上报心跳","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.node_not_ready"],"reviewed":true}
+{"query_id":"k8s_node_03","query":"Node 出现 DiskPressure 并驱逐 Pod","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.node_not_ready"],"reviewed":true}
+{"query_id":"k8s_node_04","query":"单个节点 Unknown，控制面联系不到 kubelet","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.node_not_ready"],"reviewed":true}
+{"query_id":"k8s_oom_01","query":"容器 terminated reason OOMKilled","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.oomkilled"],"reviewed":true}
+{"query_id":"k8s_oom_02","query":"Pod 内存达到 limit 后被系统杀死","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.oomkilled"],"reviewed":true}
+{"query_id":"k8s_oom_03","query":"应用内存持续增长并反复重启","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.oomkilled"],"reviewed":true}
+{"query_id":"k8s_oom_04","query":"节点内存压力和容器 OOM 怎么区分","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.oomkilled"],"reviewed":true}
+{"query_id":"k8s_svc_01","query":"Kubernetes Service ClusterIP 无法访问","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.service_unreachable"],"reviewed":true}
+{"query_id":"k8s_svc_02","query":"Service EndpointSlice 显示 endpoints none","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.service_unreachable"],"reviewed":true}
+{"query_id":"k8s_svc_03","query":"Pod IP 正常但通过服务名调用超时","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.service_unreachable"],"reviewed":true}
+{"query_id":"k8s_svc_04","query":"集群内 DNS 能解析但 Service 没有流量","component":"kubernetes","relevant_doc_ids":["runbook.kubernetes.service_unreachable"],"reviewed":true}
+{"query_id":"pg_conn_01","query":"PostgreSQL remaining connection slots are reserved","component":"postgresql","relevant_doc_ids":["runbook.postgresql.connection_exhaustion"],"reviewed":true}
+{"query_id":"pg_conn_02","query":"数据库 too many clients，应用连接池超时","component":"postgresql","relevant_doc_ids":["runbook.postgresql.connection_exhaustion"],"reviewed":true}
+{"query_id":"pg_conn_03","query":"pg_stat_activity 中 idle in transaction 太多","component":"postgresql","relevant_doc_ids":["runbook.postgresql.connection_exhaustion"],"reviewed":true}
+{"query_id":"pg_conn_04","query":"应用扩容后数据库连接数打满","component":"postgresql","relevant_doc_ids":["runbook.postgresql.connection_exhaustion"],"reviewed":true}
+{"query_id":"pg_slow_01","query":"PostgreSQL 查询 P99 突然升高","component":"postgresql","relevant_doc_ids":["runbook.postgresql.slow_query"],"reviewed":true}
+{"query_id":"pg_slow_02","query":"pg_stat_activity 出现长时间 active SQL","component":"postgresql","relevant_doc_ids":["runbook.postgresql.slow_query"],"reviewed":true}
+{"query_id":"pg_slow_03","query":"发布后 SQL 从索引扫描变成顺序扫描","component":"postgresql","relevant_doc_ids":["runbook.postgresql.slow_query"],"reviewed":true}
+{"query_id":"pg_slow_04","query":"如何安全查看 PostgreSQL 慢查询执行计划","component":"postgresql","relevant_doc_ids":["runbook.postgresql.slow_query"],"reviewed":true}
+{"query_id":"pg_lock_01","query":"PostgreSQL wait_event_type Lock","component":"postgresql","relevant_doc_ids":["runbook.postgresql.lock_contention"],"reviewed":true}
+{"query_id":"pg_lock_02","query":"数据库事务互相阻塞，接口大量超时","component":"postgresql","relevant_doc_ids":["runbook.postgresql.lock_contention"],"reviewed":true}
+{"query_id":"pg_lock_03","query":"idle in transaction 长时间持锁","component":"postgresql","relevant_doc_ids":["runbook.postgresql.lock_contention"],"reviewed":true}
+{"query_id":"pg_lock_04","query":"DDL 发布阻塞线上读写事务","component":"postgresql","relevant_doc_ids":["runbook.postgresql.lock_contention"],"reviewed":true}
+{"query_id":"pg_repl_01","query":"PostgreSQL standby replication lag 持续扩大","component":"postgresql","relevant_doc_ids":["runbook.postgresql.replication_lag"],"reviewed":true}
+{"query_id":"pg_repl_02","query":"pg_stat_replication replay_lsn 落后很多","component":"postgresql","relevant_doc_ids":["runbook.postgresql.replication_lag"],"reviewed":true}
+{"query_id":"pg_repl_03","query":"备库只读查询导致 WAL 重放延迟","component":"postgresql","relevant_doc_ids":["runbook.postgresql.replication_lag"],"reviewed":true}
+{"query_id":"pg_repl_04","query":"复制槽积压 WAL 导致主库磁盘增长","component":"postgresql","relevant_doc_ids":["runbook.postgresql.replication_lag"],"reviewed":true}
+{"query_id":"pg_disk_01","query":"PostgreSQL 数据盘空间即将耗尽","component":"postgresql","relevant_doc_ids":["runbook.postgresql.disk_space_exhaustion"],"reviewed":true}
+{"query_id":"pg_disk_02","query":"pg_wal 占满磁盘数据库 panic","component":"postgresql","relevant_doc_ids":["runbook.postgresql.disk_space_exhaustion"],"reviewed":true}
+{"query_id":"pg_disk_03","query":"如何定位 PostgreSQL 增长最快的表和索引","component":"postgresql","relevant_doc_ids":["runbook.postgresql.disk_space_exhaustion"],"reviewed":true}
+{"query_id":"pg_disk_04","query":"归档失败导致 WAL 文件持续堆积","component":"postgresql","relevant_doc_ids":["runbook.postgresql.disk_space_exhaustion"],"reviewed":true}

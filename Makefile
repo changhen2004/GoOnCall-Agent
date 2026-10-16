@@ -4,7 +4,7 @@ SHELL := /bin/bash
 BINARY_API := bin/gooncall-api
 BINARY_WORKER := bin/gooncall-worker
 
-.PHONY: help build test test-unit test-integration vet fmt lint run run-worker tidy up down clean
+.PHONY: help build test test-unit test-integration rag-eval vet fmt lint run run-worker tidy up down clean
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -29,6 +29,9 @@ test-unit: ## 运行全部单元测试
 
 test-integration: ## 运行集成测试（需要 docker compose 环境）
 	go test ./tests/integration/... -count=1 -tags=integration
+
+rag-eval: ## 运行 Runbook 文档级检索评测（需要 Embedding 与 Qdrant）
+	EXECUTION_MODE=mock go run ./cmd/rageval
 
 vet: ## go vet
 	go vet ./...

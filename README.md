@@ -243,6 +243,7 @@ GoOnCall-Agent/
 ```bash
 make test                       # go test ./... -count=1
 make test-integration           # 集成测试（本地 httptest stub，无需 docker 或外部凭证）
+make rag-eval                   # Runbook 文档级 Recall@3/5/8（需先人工审核 qrels）
 make vet && make fmt            # go vet / gofmt
 ```
 
