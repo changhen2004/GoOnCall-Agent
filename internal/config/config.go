@@ -17,6 +17,7 @@ import (
 type Config struct {
 	Server       ServerConfig       `yaml:"server"`
 	LLM          LLMConfig          `yaml:"llm"`
+	Embedding    EmbeddingConfig    `yaml:"embedding"`
 	Postgres     PostgresConfig     `yaml:"postgres"`
 	Redis        RedisConfig        `yaml:"redis"`
 	RabbitMQ     RabbitMQConfig     `yaml:"rabbitmq"`
@@ -94,13 +95,20 @@ type ServerConfig struct {
 	Port int    `yaml:"port"`
 }
 
-// LLMConfig 是大模型配置。
+// LLMConfig 是诊断大模型配置。
 type LLMConfig struct {
-	Provider       string `yaml:"provider"`
-	BaseURL        string `yaml:"base_url"`
-	APIKey         string `yaml:"api_key"`
-	Model          string `yaml:"model"`
-	EmbeddingModel string `yaml:"embedding_model"`
+	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
+}
+
+// EmbeddingConfig 是向量模型配置，与诊断大模型独立。
+type EmbeddingConfig struct {
+	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
 }
 
 // PostgresConfig 是 PostgreSQL 配置。
@@ -223,12 +231,15 @@ func Default() *Config {
 			Port: 8080,
 		},
 		LLM: LLMConfig{
-			Provider:       "openai",
-			EmbeddingModel: "text-embedding-3-small",
+			Provider: "openai",
+		},
+		Embedding: EmbeddingConfig{
+			Provider: "openai",
+			Model:    "nomic-embed-text:latest",
 		},
 		Qdrant: QdrantConfig{
 			Collection: "gooncall_knowledge",
-			Dim:        1536,
+			Dim:        768,
 		},
 		RAG: RAGConfig{
 			TopK:       8,

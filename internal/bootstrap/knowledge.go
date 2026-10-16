@@ -20,17 +20,17 @@ import (
 
 // BuildRunbookRetriever 构建 Runbook 混合检索器；配置或索引失败直接阻止启动。
 func BuildRunbookRetriever(cfg *config.Config) (retriever.Retriever, error) {
-	if strings.TrimSpace(cfg.LLM.BaseURL) == "" {
-		return nil, fmt.Errorf("llm.base_url (LLM_BASE_URL) is required for RAG")
+	if strings.TrimSpace(cfg.Embedding.BaseURL) == "" {
+		return nil, fmt.Errorf("embedding.base_url (EMBEDDING_BASE_URL) is required for RAG")
 	}
-	if strings.TrimSpace(cfg.LLM.EmbeddingModel) == "" {
-		return nil, fmt.Errorf("llm.embedding_model (LLM_EMBEDDING_MODEL) is required for RAG")
+	if strings.TrimSpace(cfg.Embedding.Model) == "" {
+		return nil, fmt.Errorf("embedding.model (EMBEDDING_MODEL) is required for RAG")
 	}
 	if cfg.RAG.Reranker.Enabled && strings.TrimSpace(cfg.RAG.Reranker.BaseURL) == "" {
 		return nil, fmt.Errorf("rag.reranker.base_url (RERANK_BASE_URL) is required when reranker is enabled")
 	}
 
-	embedder := embedding.NewOpenAIEmbedder(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
+	embedder := embedding.NewOpenAIEmbedder(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Model)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

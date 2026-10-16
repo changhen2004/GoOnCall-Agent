@@ -70,13 +70,13 @@ make up                      # 启动 postgres / rabbitmq / qdrant / prometheus 
 
 export POSTGRES_DSN='postgres://gooncall:gooncall@localhost:5432/gooncall?sslmode=disable'
 export RABBITMQ_URL='amqp://gooncall:gooncall@localhost:5672/'
-export EXECUTION_MODE=mock
-# RAG 必须配置 embedding 服务、模型与 Qdrant gRPC 地址
+# 诊断大模型配置；如果暂不运行诊断 Agent，可先留空。
 export LLM_BASE_URL='https://api.openai.com/v1'
 export LLM_API_KEY='sk-...'
-export LLM_EMBEDDING_MODEL='text-embedding-3-small'
-export QDRANT_URL='http://localhost:6334'
 export LLM_MODEL='gpt-4o'
+# RAG 使用独立的 Embedding 服务；本机正式配置默认指向 Ollama。
+export EMBEDDING_BASE_URL='http://127.0.0.1:11434/v1'
+export EMBEDDING_MODEL='nomic-embed-text:latest'
 
 go run ./cmd/api             # API，默认 :8080
 go run ./cmd/worker          # Worker（消费事件并运行 Agent）
@@ -88,7 +88,7 @@ go run ./cmd/worker          # Worker（消费事件并运行 Agent）
 ### 方式二：Docker Compose 全量启动
 
 ```bash
-# 先设置 LLM_BASE_URL / LLM_API_KEY / LLM_EMBEDDING_MODEL / LLM_MODEL。
+# 诊断 LLM 与 Embedding 分别使用 LLM_*、EMBEDDING_* 配置。
 # 容器内使用服务名连接 Qdrant；不要沿用本地运行时的 localhost。
 QDRANT_URL=http://qdrant:6334 EXECUTION_MODE=mock docker compose up -d --build
 ```
@@ -116,7 +116,13 @@ EXECUTION_MODE=mock SERVER_PORT=8082 go run ./cmd/api   # 终端 A
 
 ## 配置
 
-主配置为 `configs/config.yaml`，使用 `${VAR}` 引用环境变量。
+仓库跟踪 `configs/config.example.yaml` 模板；本机正式配置为 `configs/config.local.yaml`，默认由 API、Worker 和 RAG 评测加载且不会提交到 Git。首次使用可执行：
+
+```bash
+cp configs/config.example.yaml configs/config.local.yaml
+```
+
+Docker 镜像只复制模板，并在容器内保存为 `/app/configs/config.yaml`；Compose 通过环境变量注入正式值。本机配置和 `.env` 均被排除在构建上下文之外。
 
 | 变量 | 说明 |
 |---|---|
@@ -124,18 +130,19 @@ EXECUTION_MODE=mock SERVER_PORT=8082 go run ./cmd/api   # 终端 A
 | `POSTGRES_DSN` | PostgreSQL DSN，未设置时回退内存仓库（仅 Demo） |
 | `RABBITMQ_URL` / `RABBITMQ_MANAGEMENT_URL` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | RabbitMQ 连接与队列检查 |
 | `PROMETHEUS_URL` | Agent 工具与验证采集使用的 Prometheus |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_EMBEDDING_MODEL` | RAG 必须配置 Base URL 与 embedding 模型；API Key 按服务要求设置；`LLM_MODEL` 用于诊断 Agent |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 诊断 Agent 使用的大模型地址、凭据与模型 |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | RAG 使用的独立 Embedding 地址、凭据与模型 |
 | `RERANK_ENABLED` / `RERANK_BASE_URL` / `RERANK_API_KEY` | 可选 TEI `/rerank` 服务；启用后 Base URL 必填，API Key 按服务要求设置 |
 | `ALERT_WEBHOOK_TOKEN` / `API_READ_TOKEN` / `API_ADMIN_TOKEN` / `API_ADMIN_ACTOR` | 三类最小认证 Token 与审批人标识 |
 | `EXECUTION_MODE` | 处置通道：`mock`（显式 Demo，模拟重启）/ `http`（固定 URL 真实处置）；必须设置 |
 | `RESTART_WORKER_URL` / `RESTART_WORKER_TOKEN` | `execution.mode=http` 时的固定处置 endpoint 与 Bearer Token |
 | `RESTART_WORKER_ALLOWED_TARGETS` | 允许重启的 target 白名单（逗号分隔，`http` 模式必填） |
 | `VERIFICATION_MODE` | 验证采集器：`mock`（默认）/ `prometheus` |
-| `CONFIG_PATH` | 配置文件路径，默认 `configs/config.yaml` |
+| `CONFIG_PATH` | 配置文件路径，本机默认 `configs/config.local.yaml`；容器显式设为 `/app/configs/config.yaml` |
 | `QDRANT_URL` | 必填的 Qdrant gRPC 地址，如 `http://localhost:6334`；省略端口时默认 6334 |
 | `REDIS_ADDR` / `REDIS_PASSWORD` | 可选 Redis 组件，不参与闭环 |
 
-`configs/config.yaml` 另含：`agent`（`max_steps`、`max_tool_calls`、整轮 `timeout_seconds`）、`tool.timeout_seconds`、`execution.timeout_seconds`，以及 `verification.attempts` / `interval_seconds` / `required_successes`（连续验证次数与间隔）。
+配置文件另含：`agent`（`max_steps`、`max_tool_calls`、整轮 `timeout_seconds`）、`tool.timeout_seconds`、`execution.timeout_seconds`，以及 `verification.attempts` / `interval_seconds` / `required_successes`（连续验证次数与间隔）。
 
 ### 生产闭环配置
 
@@ -228,7 +235,8 @@ GoOnCall-Agent/
 │   ├── observability/   # Prometheus 指标
 │   ├── storage/         # postgres / redis
 │   └── tool/            # registry / prometheus / rabbitmq / runbook / incident / deployment
-├── configs/config.yaml  # 主配置
+├── configs/
+│   └── config.example.yaml  # 可提交的配置模板；config.local.yaml 为本机正式配置且不入库
 ├── deploy/              # docker / prometheus / alertmanager / grafana / k8s（占位）
 ├── migrations/          # SQL 迁移
 ├── prompts/             # Agent 提示词

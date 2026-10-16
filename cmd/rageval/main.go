@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "configs/config.yaml", "配置文件路径")
+	configPath := flag.String("config", "configs/config.local.yaml", "配置文件路径")
 	qrelsPath := flag.String("qrels", "docs/eval/runbook_qrels.jsonl", "标注查询 JSONL")
 	flag.Parse()
 

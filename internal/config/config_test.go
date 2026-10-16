@@ -22,7 +22,14 @@ func TestLoad_ReadsYAMLValues(t *testing.T) {
   port: 9090
 llm:
   provider: openai
+  base_url: http://llm.example/v1
+  api_key: llm-key
   model: gpt-4o
+embedding:
+  provider: openai
+  base_url: http://embedding.example/v1
+  api_key: embedding-key
+  model: nomic-embed-text:latest
 agent:
   max_steps: 25
   timeout_seconds: 90
@@ -49,6 +56,14 @@ execution:
 	if cfg.LLM.Model != "gpt-4o" {
 		t.Errorf("LLM.Model = %q, want gpt-4o", cfg.LLM.Model)
 	}
+	if cfg.LLM.BaseURL != "http://llm.example/v1" || cfg.LLM.APIKey != "llm-key" {
+		t.Errorf("LLM = %+v, want independent chat endpoint", cfg.LLM)
+	}
+	if cfg.Embedding.BaseURL != "http://embedding.example/v1" ||
+		cfg.Embedding.APIKey != "embedding-key" ||
+		cfg.Embedding.Model != "nomic-embed-text:latest" {
+		t.Errorf("Embedding = %+v, want independent embedding endpoint", cfg.Embedding)
+	}
 	if cfg.Agent.MaxSteps != 25 {
 		t.Errorf("Agent.MaxSteps = %d, want 25", cfg.Agent.MaxSteps)
 	}
@@ -64,6 +79,7 @@ func TestLoad_ExpandsEnvVars(t *testing.T) {
 	t.Setenv("POSTGRES_DSN", "postgres://u:p@localhost:5432/gooncall")
 	t.Setenv("REDIS_ADDR", "localhost:6379")
 	t.Setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+	t.Setenv("EMBEDDING_BASE_URL", "http://localhost:11434/v1")
 
 	path := writeTempConfig(t, `postgres:
   dsn: ${POSTGRES_DSN}
@@ -71,6 +87,8 @@ redis:
   addr: ${REDIS_ADDR}
 rabbitmq:
   url: ${RABBITMQ_URL}
+embedding:
+  base_url: ${EMBEDDING_BASE_URL}
 execution:
   mode: mock
 `)
@@ -88,6 +106,9 @@ execution:
 	}
 	if cfg.RabbitMQ.URL != "amqp://guest:guest@localhost:5672/" {
 		t.Errorf("RabbitMQ.URL = %q", cfg.RabbitMQ.URL)
+	}
+	if cfg.Embedding.BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("Embedding.BaseURL = %q", cfg.Embedding.BaseURL)
 	}
 }
 
@@ -116,6 +137,12 @@ func TestLoad_AppliesDefaults(t *testing.T) {
 	}
 	if cfg.Qdrant.Collection != "gooncall_knowledge" {
 		t.Errorf("Qdrant.Collection = %q", cfg.Qdrant.Collection)
+	}
+	if cfg.Qdrant.Dim != 768 {
+		t.Errorf("Qdrant.Dim = %d, want 768", cfg.Qdrant.Dim)
+	}
+	if cfg.Embedding.Provider != "openai" || cfg.Embedding.Model != "nomic-embed-text:latest" {
+		t.Errorf("Embedding defaults = %+v", cfg.Embedding)
 	}
 	if !cfg.Approval.Enabled {
 		t.Errorf("Approval.Enabled = false, want true")

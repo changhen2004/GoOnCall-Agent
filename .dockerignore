@@ -1,0 +1,5 @@
+.git
+.env
+bin
+dist
+configs/config.local.yaml

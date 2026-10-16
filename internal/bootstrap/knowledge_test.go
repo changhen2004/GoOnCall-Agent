@@ -13,16 +13,16 @@ import (
 )
 
 func TestBuildRetriever_RequiresConfiguration(t *testing.T) {
-	for _, field := range []string{"llm.base_url", "llm.embedding_model", "qdrant.url", "vector_store.provider"} {
+	for _, field := range []string{"embedding.base_url", "embedding.model", "qdrant.url", "vector_store.provider"} {
 		t.Run(field, func(t *testing.T) {
 			cfg := config.Default()
-			cfg.LLM.BaseURL = "http://embedding.invalid/v1"
+			cfg.Embedding.BaseURL = "http://embedding.invalid/v1"
 			cfg.Qdrant.URL = "http://qdrant.invalid:6334"
 			switch field {
-			case "llm.base_url":
-				cfg.LLM.BaseURL = " "
-			case "llm.embedding_model":
-				cfg.LLM.EmbeddingModel = " "
+			case "embedding.base_url":
+				cfg.Embedding.BaseURL = " "
+			case "embedding.model":
+				cfg.Embedding.Model = " "
 			case "qdrant.url":
 				cfg.Qdrant.URL = " "
 			case "vector_store.provider":
@@ -38,7 +38,7 @@ func TestBuildRetriever_RequiresConfiguration(t *testing.T) {
 
 func TestBuildRetriever_RequiresEnabledRerankerURL(t *testing.T) {
 	cfg := config.Default()
-	cfg.LLM.BaseURL = "http://embedding.invalid/v1"
+	cfg.Embedding.BaseURL = "http://embedding.invalid/v1"
 	cfg.Qdrant.URL = "http://qdrant.invalid:6334"
 	cfg.RAG.Reranker.Enabled = true
 

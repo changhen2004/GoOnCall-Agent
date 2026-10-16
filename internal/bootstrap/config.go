@@ -10,7 +10,7 @@ import (
 func loadConfig() (*config.Config, error) {
 	cfgPath := os.Getenv("CONFIG_PATH")
 	if cfgPath == "" {
-		cfgPath = "configs/config.yaml"
+		cfgPath = "configs/config.local.yaml"
 	}
 	return config.Load(cfgPath)
 }

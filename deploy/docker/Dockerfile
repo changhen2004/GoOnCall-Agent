@@ -21,7 +21,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/gooncall ./cmd/${BINARY}
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /out/gooncall /usr/local/bin/gooncall
-COPY configs /app/configs
+# 镜像只携带模板；本机正式配置由 .dockerignore 排除，避免把密钥打进镜像。
+COPY configs/config.example.yaml /app/configs/config.yaml
 # RAG 知识库（runbook 等）与 Agent 提示词：配置 LLM 后运行时会读取。
 COPY docs /app/docs
 COPY prompts /app/prompts
