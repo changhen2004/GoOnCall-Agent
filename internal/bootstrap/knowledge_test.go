@@ -47,6 +47,37 @@ func TestBuildRetriever_RequiresEnabledRerankerURL(t *testing.T) {
 	}
 }
 
+func TestNewConfiguredReranker(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     config.RerankerConfig
+		wantErr string
+	}{
+		{
+			name: "qwen",
+			cfg: config.RerankerConfig{
+				Provider: config.RerankerProviderQwen,
+				BaseURL:  "https://example.invalid/compatible-api/v1",
+				APIKey:   "test-key",
+				Model:    "qwen3-rerank",
+			},
+		},
+		{name: "qwen without key", cfg: config.RerankerConfig{Provider: "qwen", BaseURL: "http://reranker", Model: "qwen3-rerank"}, wantErr: "RERANK_API_KEY"},
+		{name: "qwen without model", cfg: config.RerankerConfig{Provider: "qwen", BaseURL: "http://reranker", APIKey: "test-key"}, wantErr: "RERANK_MODEL"},
+		{name: "unknown provider", cfg: config.RerankerConfig{Provider: "unknown", BaseURL: "http://reranker"}, wantErr: "RERANK_PROVIDER"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reranker, err := newConfiguredReranker(tc.cfg)
+			if tc.wantErr == "" && (reranker == nil || err != nil) {
+				t.Fatalf("newConfiguredReranker() = %v, %v", reranker, err)
+			}
+			if tc.wantErr != "" && (reranker != nil || err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("newConfiguredReranker() = %v, %v; want %s error", reranker, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestQdrantAddress(t *testing.T) {
 	for _, tc := range []struct {
 		raw, host string

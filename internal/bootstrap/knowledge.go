@@ -26,8 +26,13 @@ func BuildRunbookRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	if strings.TrimSpace(cfg.Embedding.Model) == "" {
 		return nil, fmt.Errorf("embedding.model (EMBEDDING_MODEL) is required for RAG")
 	}
-	if cfg.RAG.Reranker.Enabled && strings.TrimSpace(cfg.RAG.Reranker.BaseURL) == "" {
-		return nil, fmt.Errorf("rag.reranker.base_url (RERANK_BASE_URL) is required when reranker is enabled")
+	var candidateReranker retriever.Reranker
+	if cfg.RAG.Reranker.Enabled {
+		var err error
+		candidateReranker, err = newConfiguredReranker(cfg.RAG.Reranker)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	embedder := embedding.NewOpenAIEmbedder(cfg.Embedding.BaseURL, cfg.Embedding.APIKey, cfg.Embedding.Model)
@@ -58,13 +63,33 @@ func BuildRunbookRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	}
 
 	h := retriever.NewHybrid(runbooks, embedder, store, cfg.RAG.CandidateK)
-	if cfg.RAG.Reranker.Enabled {
-		h.WithReranker(reranker.NewTEI(cfg.RAG.Reranker.BaseURL, cfg.RAG.Reranker.APIKey), cfg.RAG.CandidateK)
+	if candidateReranker != nil {
+		h.WithReranker(candidateReranker, cfg.RAG.CandidateK)
 	}
 	if err := h.Index(ctx); err != nil {
 		return nil, fmt.Errorf("index knowledge: %w", err)
 	}
 	return h, nil
+}
+
+func newConfiguredReranker(cfg config.RerankerConfig) (retriever.Reranker, error) {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil, fmt.Errorf("rag.reranker.base_url (RERANK_BASE_URL) is required when reranker is enabled")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
+	case "", config.RerankerProviderTEI:
+		return reranker.NewTEI(cfg.BaseURL, cfg.APIKey), nil
+	case config.RerankerProviderQwen:
+		if strings.TrimSpace(cfg.APIKey) == "" {
+			return nil, fmt.Errorf("rag.reranker.api_key (RERANK_API_KEY) is required when RERANK_PROVIDER=qwen")
+		}
+		if strings.TrimSpace(cfg.Model) == "" {
+			return nil, fmt.Errorf("rag.reranker.model (RERANK_MODEL) is required when RERANK_PROVIDER=qwen")
+		}
+		return reranker.NewQwen(cfg.BaseURL, cfg.APIKey, cfg.Model), nil
+	default:
+		return nil, fmt.Errorf("rag.reranker.provider (RERANK_PROVIDER) must be tei or qwen")
+	}
 }
 
 // buildVectorStore 使用显式配置的 Qdrant；内存向量库仅用于单元测试。

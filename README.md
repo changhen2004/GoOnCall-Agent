@@ -132,7 +132,7 @@ Docker 镜像只复制模板，并在容器内保存为 `/app/configs/config.yam
 | `PROMETHEUS_URL` | Agent 工具与验证采集使用的 Prometheus |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 诊断 Agent 使用的大模型地址、凭据与模型 |
 | `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | RAG 使用的独立 Embedding 地址、凭据与模型 |
-| `RERANK_ENABLED` / `RERANK_BASE_URL` / `RERANK_API_KEY` | 可选 TEI `/rerank` 服务；启用后 Base URL 必填，API Key 按服务要求设置 |
+| `RERANK_ENABLED` / `RERANK_PROVIDER` / `RERANK_BASE_URL` / `RERANK_API_KEY` / `RERANK_MODEL` | 可选候选重排；`provider` 支持 `tei`（默认）或 `qwen`（DashScope 协议，API Key 与模型必填） |
 | `ALERT_WEBHOOK_TOKEN` / `API_READ_TOKEN` / `API_ADMIN_TOKEN` / `API_ADMIN_ACTOR` | 三类最小认证 Token 与审批人标识 |
 | `EXECUTION_MODE` | 处置通道：`mock`（显式 Demo，模拟重启）/ `http`（固定 URL 真实处置）；必须设置 |
 | `RESTART_WORKER_URL` / `RESTART_WORKER_TOKEN` | `execution.mode=http` 时的固定处置 endpoint 与 Bearer Token |

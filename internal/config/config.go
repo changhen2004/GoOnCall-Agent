@@ -153,12 +153,20 @@ type RAGConfig struct {
 	Reranker   RerankerConfig `yaml:"reranker"`
 }
 
-// RerankerConfig 是可选的 TEI cross-encoder 重排配置。
+// RerankerConfig 是可选的候选重排配置。
 type RerankerConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
+	Enabled  bool   `yaml:"enabled"`
+	Provider string `yaml:"provider"`
+	BaseURL  string `yaml:"base_url"`
+	APIKey   string `yaml:"api_key"`
+	Model    string `yaml:"model"`
 }
+
+// 重排服务类型。
+const (
+	RerankerProviderTEI  = "tei"
+	RerankerProviderQwen = "qwen"
+)
 
 // AgentConfig 是 Agent 运行时约束配置。
 type AgentConfig struct {
@@ -244,6 +252,9 @@ func Default() *Config {
 		RAG: RAGConfig{
 			TopK:       8,
 			CandidateK: 20,
+			Reranker: RerankerConfig{
+				Provider: RerankerProviderTEI,
+			},
 		},
 		Agent: AgentConfig{
 			MaxSteps:       15,
@@ -373,8 +384,22 @@ func (c *Config) Validate() error {
 	if c.RAG.CandidateK < 1 {
 		return fmt.Errorf("rag.candidate_k must be >= 1")
 	}
-	if c.RAG.Reranker.Enabled && strings.TrimSpace(c.RAG.Reranker.BaseURL) == "" {
-		return fmt.Errorf("rag.reranker.base_url is required when reranker is enabled")
+	if c.RAG.Reranker.Enabled {
+		if strings.TrimSpace(c.RAG.Reranker.BaseURL) == "" {
+			return fmt.Errorf("rag.reranker.base_url is required when reranker is enabled")
+		}
+		switch strings.ToLower(strings.TrimSpace(c.RAG.Reranker.Provider)) {
+		case "", RerankerProviderTEI:
+		case RerankerProviderQwen:
+			if strings.TrimSpace(c.RAG.Reranker.APIKey) == "" {
+				return fmt.Errorf("rag.reranker.api_key is required when reranker.provider=qwen")
+			}
+			if strings.TrimSpace(c.RAG.Reranker.Model) == "" {
+				return fmt.Errorf("rag.reranker.model is required when reranker.provider=qwen")
+			}
+		default:
+			return fmt.Errorf("rag.reranker.provider must be tei or qwen")
+		}
 	}
 
 	if c.Execution.Mode != ExecutionModeHTTP {

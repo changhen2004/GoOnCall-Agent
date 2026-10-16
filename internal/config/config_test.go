@@ -296,6 +296,40 @@ func TestValidate_RerankerRequiresBaseURL(t *testing.T) {
 	}
 }
 
+func TestValidate_QwenRerankerRequiresCredentialsAndModel(t *testing.T) {
+	cfg := Default()
+	cfg.RAG.Reranker = RerankerConfig{
+		Enabled:  true,
+		Provider: RerankerProviderQwen,
+		BaseURL:  "https://example.invalid/compatible-api/v1",
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "rag.reranker.api_key") {
+		t.Fatalf("Validate() error = %v, want reranker API key error", err)
+	}
+
+	cfg.RAG.Reranker.APIKey = "test-key"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "rag.reranker.model") {
+		t.Fatalf("Validate() error = %v, want reranker model error", err)
+	}
+
+	cfg.RAG.Reranker.Model = "qwen3-rerank"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid Qwen reranker config rejected: %v", err)
+	}
+}
+
+func TestValidate_RejectsUnknownRerankerProvider(t *testing.T) {
+	cfg := Default()
+	cfg.RAG.Reranker = RerankerConfig{
+		Enabled:  true,
+		Provider: "unknown",
+		BaseURL:  "http://reranker:80",
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "rag.reranker.provider") {
+		t.Fatalf("Validate() error = %v, want reranker provider error", err)
+	}
+}
+
 // TestValidate_DoesNotLeakSecrets 校验错误不得回显 Token / 凭证。
 func TestValidate_DoesNotLeakSecrets(t *testing.T) {
 	const adminSecret = "super-secret-admin-token"

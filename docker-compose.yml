@@ -120,8 +120,10 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text:latest}
       RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_PROVIDER: ${RERANK_PROVIDER:-tei}
       RERANK_BASE_URL: ${RERANK_BASE_URL:-}
       RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_MODEL: ${RERANK_MODEL:-}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -163,8 +165,10 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text:latest}
       RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_PROVIDER: ${RERANK_PROVIDER:-tei}
       RERANK_BASE_URL: ${RERANK_BASE_URL:-}
       RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_MODEL: ${RERANK_MODEL:-}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
     extra_hosts:
       - "host.docker.internal:host-gateway"
