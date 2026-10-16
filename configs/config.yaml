@@ -32,7 +32,7 @@ qdrant:
   # gRPC 地址，如 http://localhost:6334；省略端口时默认 6334。
   url: ${QDRANT_URL}
   collection: gooncall_knowledge
-  dim: 1536
+  dim: 768
 
 vector_store:
   provider: qdrant
