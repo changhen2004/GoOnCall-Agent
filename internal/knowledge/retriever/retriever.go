@@ -74,9 +74,22 @@ func (h *Hybrid) Index(ctx context.Context) error {
 			return fmt.Errorf("embed chunk %s: expected one non-empty vector", c.ID)
 		}
 		if err := h.vector.Upsert(ctx, []vectorstore.Point{{
-			ID:      c.ID,
-			Vector:  vecs[0],
-			Payload: map[string]any{"source": c.Source, "doc_type": c.DocType, "chunk_hash": hash},
+			ID:     c.ID,
+			Vector: vecs[0],
+			Payload: map[string]any{
+				"doc_id":           c.DocID,
+				"source":           c.Source,
+				"doc_type":         c.DocType,
+				"service":          c.Service,
+				"component":        c.Component,
+				"incident_type":    c.IncidentType,
+				"product_version":  c.ProductVersion,
+				"source_kind":      c.SourceKind,
+				"source_url":       c.SourceURL,
+				"last_verified_at": c.LastVerifiedAt,
+				"severity":         c.Severity,
+				"chunk_hash":       hash,
+			},
 		}}); err != nil {
 			return fmt.Errorf("upsert chunk %s: %w", c.ID, err)
 		}
@@ -147,12 +160,18 @@ func (h *Hybrid) Retrieve(ctx context.Context, query string, topK int) ([]Result
 // ToEvidence 将检索结果绑定为 RUNBOOK 证据。
 func (r Result) ToEvidence(runID string) *incidentmodel.Evidence {
 	return &incidentmodel.Evidence{
-		ID:        "ev_" + uuid.NewString(),
-		RunID:     runID,
-		Type:      incidentmodel.EvidenceRunbook,
-		Source:    r.Chunk.Source,
-		Content:   r.Chunk.Content,
-		Metadata:  map[string]any{"doc_type": r.Chunk.DocType, "title": r.Chunk.Title, "score": r.Score},
+		ID:      "ev_" + uuid.NewString(),
+		RunID:   runID,
+		Type:    incidentmodel.EvidenceRunbook,
+		Source:  r.Chunk.Source,
+		Content: r.Chunk.Content,
+		Metadata: map[string]any{
+			"doc_id":    r.Chunk.DocID,
+			"doc_type":  r.Chunk.DocType,
+			"component": r.Chunk.Component,
+			"title":     r.Chunk.Title,
+			"score":     r.Score,
+		},
 		CreatedAt: time.Now(),
 	}
 }

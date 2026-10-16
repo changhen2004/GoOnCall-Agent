@@ -17,8 +17,8 @@ import (
 	"gooncall-agent/internal/knowledge/vectorstore"
 )
 
-// buildRetriever 构建 RAG 混合检索器；配置或索引失败直接阻止启动。
-func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
+// BuildRunbookRetriever 构建 Runbook 混合检索器；配置或索引失败直接阻止启动。
+func BuildRunbookRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	if strings.TrimSpace(cfg.LLM.BaseURL) == "" {
 		return nil, fmt.Errorf("llm.base_url (LLM_BASE_URL) is required for RAG")
 	}
@@ -43,8 +43,17 @@ func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	if len(chunks) == 0 {
 		return nil, fmt.Errorf("no knowledge docs found under docs/")
 	}
+	runbooks := chunks[:0]
+	for _, chunk := range chunks {
+		if chunk.DocType == "runbook" {
+			runbooks = append(runbooks, chunk)
+		}
+	}
+	if len(runbooks) == 0 {
+		return nil, fmt.Errorf("no runbook docs found under docs/runbooks/")
+	}
 
-	h := retriever.NewHybrid(chunks, embedder, store, cfg.RAG.CandidateK)
+	h := retriever.NewHybrid(runbooks, embedder, store, cfg.RAG.CandidateK)
 	if err := h.Index(ctx); err != nil {
 		return nil, fmt.Errorf("index knowledge: %w", err)
 	}

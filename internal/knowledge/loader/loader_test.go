@@ -21,7 +21,14 @@ func writeFile(t *testing.T, dir, rel, content string) {
 }
 
 const rabbitmqDoc = `---
+doc_id: runbook.rabbitmq.consumer-dropped
 service: GoCommunity
+component: rabbitmq
+incident_type: consumer_count_dropped
+product_version: "4.x"
+source_kind: official
+source_url: https://www.rabbitmq.com/docs/monitoring
+last_verified_at: 2026-10-16
 severity: P1
 tags: [rabbitmq, worker]
 ---
@@ -56,6 +63,15 @@ func TestLoad_ExtractsMetadataAndChunks(t *testing.T) {
 	if c.DocType != "runbook" {
 		t.Errorf("DocType = %q, want runbook", c.DocType)
 	}
+	if c.DocID != "runbook.rabbitmq.consumer-dropped" || c.Component != "rabbitmq" {
+		t.Errorf("DocID/Component = %q/%q", c.DocID, c.Component)
+	}
+	if c.IncidentType != "consumer_count_dropped" || c.ProductVersion != "4.x" {
+		t.Errorf("IncidentType/ProductVersion = %q/%q", c.IncidentType, c.ProductVersion)
+	}
+	if c.SourceKind != "official" || c.SourceURL == "" || c.LastVerifiedAt != "2026-10-16" {
+		t.Errorf("source metadata = %q/%q/%q", c.SourceKind, c.SourceURL, c.LastVerifiedAt)
+	}
 	if c.Service != "GoCommunity" {
 		t.Errorf("Service = %q, want GoCommunity", c.Service)
 	}
@@ -70,6 +86,22 @@ func TestLoad_ExtractsMetadataAndChunks(t *testing.T) {
 	}
 	if c.ID == "" || c.Source != "rabbitmq.md" {
 		t.Errorf("ID/Source = %q/%q", c.ID, c.Source)
+	}
+}
+
+func TestLoad_UsesRelativePathAsFallbackDocID(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, filepath.Join("runbooks", "rabbitmq.md"), "# 标题\n\n正文")
+
+	chunks, err := New(dir, splitter.New(1000)).Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := chunks[0].DocID; got != "runbooks/rabbitmq.md" {
+		t.Fatalf("DocID = %q, want relative path", got)
+	}
+	if got := chunks[0].ID; got != "runbooks/rabbitmq.md#0" {
+		t.Fatalf("ID = %q, want stable relative path ID", got)
 	}
 }
 

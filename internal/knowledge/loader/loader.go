@@ -31,10 +31,17 @@ func New(docsDir string, sp *splitter.Splitter) *Loader {
 
 // frontmatter 是文档头部元数据（YAML）。
 type frontmatter struct {
-	Service  string   `yaml:"service"`
-	Severity string   `yaml:"severity"`
-	Title    string   `yaml:"title"`
-	Tags     []string `yaml:"tags"`
+	DocID          string   `yaml:"doc_id"`
+	Service        string   `yaml:"service"`
+	Component      string   `yaml:"component"`
+	IncidentType   string   `yaml:"incident_type"`
+	ProductVersion string   `yaml:"product_version"`
+	SourceKind     string   `yaml:"source_kind"`
+	SourceURL      string   `yaml:"source_url"`
+	LastVerifiedAt string   `yaml:"last_verified_at"`
+	Severity       string   `yaml:"severity"`
+	Title          string   `yaml:"title"`
+	Tags           []string `yaml:"tags"`
 }
 
 // Load 递归加载 docs 目录下所有 .md 文件，切分为 Chunk。
@@ -49,6 +56,7 @@ func (l *Loader) Load(_ context.Context) ([]*kmodel.Chunk, error) {
 		}
 
 		rel, _ := filepath.Rel(l.docsDir, path)
+		rel = filepath.ToSlash(rel)
 		docType := docTypeFromPath(rel)
 		source := filepath.Base(path)
 
@@ -58,6 +66,10 @@ func (l *Loader) Load(_ context.Context) ([]*kmodel.Chunk, error) {
 		}
 
 		fm, body := parseFrontmatter(string(content))
+		docID := strings.TrimSpace(fm.DocID)
+		if docID == "" {
+			docID = rel
+		}
 		title := fm.Title
 		if title == "" {
 			title = extractHeading(body)
@@ -65,14 +77,21 @@ func (l *Loader) Load(_ context.Context) ([]*kmodel.Chunk, error) {
 
 		for i, piece := range l.splitter.Split(body) {
 			chunks = append(chunks, &kmodel.Chunk{
-				ID:       fmt.Sprintf("%s#%d", source, i),
-				Source:   source,
-				DocType:  docType,
-				Service:  fm.Service,
-				Title:    title,
-				Content:  piece,
-				Severity: fm.Severity,
-				Tags:     fm.Tags,
+				ID:             fmt.Sprintf("%s#%d", docID, i),
+				DocID:          docID,
+				Source:         source,
+				DocType:        docType,
+				Service:        fm.Service,
+				Component:      fm.Component,
+				IncidentType:   fm.IncidentType,
+				ProductVersion: fm.ProductVersion,
+				SourceKind:     fm.SourceKind,
+				SourceURL:      fm.SourceURL,
+				LastVerifiedAt: fm.LastVerifiedAt,
+				Title:          title,
+				Content:        piece,
+				Severity:       fm.Severity,
+				Tags:           fm.Tags,
 			})
 		}
 		return nil

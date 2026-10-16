@@ -28,7 +28,7 @@ func TestBuildRetriever_RequiresConfiguration(t *testing.T) {
 			case "vector_store.provider":
 				cfg.VectorStore.Provider = "memory"
 			}
-			r, err := buildRetriever(cfg)
+			r, err := BuildRunbookRetriever(cfg)
 			if r != nil || err == nil || !strings.Contains(err.Error(), field) {
 				t.Fatalf("buildRetriever = %v, %v; want explicit %s error", r, err, field)
 			}

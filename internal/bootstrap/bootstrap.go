@@ -49,7 +49,7 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	ragRetriever, err := buildRetriever(cfg)
+	ragRetriever, err := BuildRunbookRetriever(cfg)
 	if err != nil {
 		return nil, err
 	}
