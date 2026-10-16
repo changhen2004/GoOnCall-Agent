@@ -256,6 +256,19 @@ func TestValidate_MockModeAllowsEmptyTokens(t *testing.T) {
 	}
 }
 
+func TestValidate_RerankerRequiresBaseURL(t *testing.T) {
+	cfg := Default()
+	cfg.RAG.Reranker.Enabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "rag.reranker.base_url") {
+		t.Fatalf("Validate() error = %v, want reranker base URL error", err)
+	}
+
+	cfg.RAG.Reranker.BaseURL = "http://reranker:80"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid reranker config rejected: %v", err)
+	}
+}
+
 // TestValidate_DoesNotLeakSecrets 校验错误不得回显 Token / 凭证。
 func TestValidate_DoesNotLeakSecrets(t *testing.T) {
 	const adminSecret = "super-secret-admin-token"

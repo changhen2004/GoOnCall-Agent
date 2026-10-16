@@ -13,7 +13,7 @@ GoOnCall Agent 把运维告警处理做成一条可审计的自动链路。Alert
 - **Incident 生命周期**：告警 webhook 创建 / 关闭工单；创建后自动发布 `agent.requested`（告警即诊断）；同一指纹只允许一条非终态 Incident，终态后复发创建**新的** Incident（新周期、新 ID）；状态迁移由 `version` 乐观锁与严格状态机保护，冲突返回 409。
 - **ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 `LLM_MODEL` 时不装配诊断 Agent（`analyze` 仅做状态流转）。
 - **工具集**（按配置启用）：`prometheus_query`、`prometheus_alerts`、`prometheus_range_query`、`rabbitmq_inspect`、`runbook_search`、`incident_history`、`worker_restart`。
-- **RAG 混合检索**：Markdown 加载 → 标题 / 段落 / 句子递归分块（按 Unicode 字符计数）→ Embedding → Qdrant → BM25 + 向量混合检索（RRF 融合）；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。缺少 embedding 服务 / 模型 / Qdrant 地址，或连接、索引失败时直接报错，不降级；内存向量库仅用于单元测试。
+- **RAG 混合检索**：Markdown 加载 → 标题 / 段落 / 句子递归分块（按 Unicode 字符计数）→ Embedding → Qdrant → BM25 + 向量混合检索（RRF 融合）→ 可选 TEI cross-encoder 重排；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。缺少依赖或检索、重排失败时直接报错，不降级；内存向量库仅用于单元测试。
 - **Run 记录与实时事件**：AgentRun / Step / ToolCall 持久化，任一关键审计写入失败都会让本轮诊断失败而非静默成功；同一 Incident 已有活动 Run 时，重复消息直接成功确认，不按时间阈值抢占执行。SSE 推送 Run / Step / Tool 事件；支持 `max_steps`、`max_tool_calls`、整轮诊断超时与单次工具超时。
 - **HITL 人工审批**：风险策略判定 → 审批（批准 / 拒绝）→ 批准后执行。执行权通过数据库条件更新（CAS）获得：`PENDING → APPROVED → EXECUTING → EXECUTED/FAILED/UNKNOWN`，并发或重复批准返回 409 且不会二次执行；`EXPIRED` 表示 Incident 已外部恢复或不再允许执行，`UNKNOWN` 表示外部动作结果未知，两者都需要人工核对，不自动重试。
 - **处置与连续验证**：审批通过 → 执行 `worker_restart`（`execution.mode=mock` 为模拟执行；`mode=http` 调用固定 URL 的 HTTP 适配器，带 Bearer Token 与 `Idempotency-Key: <approval_id>`，target 受白名单限制）→ **连续**验证 `required_successes` 次全部通过才 `RESOLVED` 并生成 Postmortem；采集错误、空结果、`NaN`/`Inf`、验证失败一律进 `FAILED`，绝不按 0 处理。
@@ -125,6 +125,7 @@ EXECUTION_MODE=mock SERVER_PORT=8082 go run ./cmd/api   # 终端 A
 | `RABBITMQ_URL` / `RABBITMQ_MANAGEMENT_URL` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | RabbitMQ 连接与队列检查 |
 | `PROMETHEUS_URL` | Agent 工具与验证采集使用的 Prometheus |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_EMBEDDING_MODEL` | RAG 必须配置 Base URL 与 embedding 模型；API Key 按服务要求设置；`LLM_MODEL` 用于诊断 Agent |
+| `RERANK_ENABLED` / `RERANK_BASE_URL` / `RERANK_API_KEY` | 可选 TEI `/rerank` 服务；启用后 Base URL 必填，API Key 按服务要求设置 |
 | `ALERT_WEBHOOK_TOKEN` / `API_READ_TOKEN` / `API_ADMIN_TOKEN` / `API_ADMIN_ACTOR` | 三类最小认证 Token 与审批人标识 |
 | `EXECUTION_MODE` | 处置通道：`mock`（显式 Demo，模拟重启）/ `http`（固定 URL 真实处置）；必须设置 |
 | `RESTART_WORKER_URL` / `RESTART_WORKER_TOKEN` | `execution.mode=http` 时的固定处置 endpoint 与 Bearer Token |
@@ -257,6 +258,6 @@ CI（`.github/workflows/ci.yml`）执行 `go mod tidy` 检查、`gofmt` 格式�
 - **可靠闭环要求显式配置**：真实处置需要 `execution.mode=http` + `verification.mode=prometheus` + 三个 Token + target 白名单（见「生产闭环配置」）。此时处置走固定 URL（不接受任意 URL / Shell / Kubernetes SDK），幂等键为 `approval_id`，只有连续验证通过才会 `RESOLVED`。
 - **SSE 是单进程实验能力**：事件只在本进程内存广播，多副本部署时不会跨进程同步；生产闭环请使用持久化查询 API（`/incidents/:id/events`、`/runs/:id/tool-calls`、`/approvals?status=PENDING`）。
 - **只支持一种自动处置**：`restart_worker`。LLM 只能请求创建审批，不能提供 URL、命令或凭证。
-- **不包含**：前端、通知平台、Outbox、多 Agent 编排（Supervisor 仅为角色占位）、token 级流式输出、向量 RAG 调优。
+- **不包含**：前端、通知平台、Outbox、多 Agent 编排（Supervisor 仅为角色占位）、token 级流式输出、reranker 模型服务的部署与性能证明。
 - 去重与审计基于 PostgreSQL（部分唯一索引 + 审计事件）；schema 只由 `migrations/*.sql` 管理，应在 API / Worker 启动前完成。Qdrant 为 RAG 启动依赖；Redis 为可选组件，不参与闭环。
 - `deploy/k8s` 为空占位，目前仅提供 Docker Compose 部署。

@@ -117,6 +117,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_BASE_URL: ${RERANK_BASE_URL:-}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -155,6 +158,9 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_BASE_URL: ${RERANK_BASE_URL:-}
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
       QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
     extra_hosts:
       - "host.docker.internal:host-gateway"

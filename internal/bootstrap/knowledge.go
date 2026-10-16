@@ -12,6 +12,7 @@ import (
 	"gooncall-agent/internal/config"
 	"gooncall-agent/internal/knowledge/embedding"
 	"gooncall-agent/internal/knowledge/loader"
+	"gooncall-agent/internal/knowledge/reranker"
 	"gooncall-agent/internal/knowledge/retriever"
 	"gooncall-agent/internal/knowledge/splitter"
 	"gooncall-agent/internal/knowledge/vectorstore"
@@ -24,6 +25,9 @@ func BuildRunbookRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	}
 	if strings.TrimSpace(cfg.LLM.EmbeddingModel) == "" {
 		return nil, fmt.Errorf("llm.embedding_model (LLM_EMBEDDING_MODEL) is required for RAG")
+	}
+	if cfg.RAG.Reranker.Enabled && strings.TrimSpace(cfg.RAG.Reranker.BaseURL) == "" {
+		return nil, fmt.Errorf("rag.reranker.base_url (RERANK_BASE_URL) is required when reranker is enabled")
 	}
 
 	embedder := embedding.NewOpenAIEmbedder(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
@@ -54,6 +58,9 @@ func BuildRunbookRetriever(cfg *config.Config) (retriever.Retriever, error) {
 	}
 
 	h := retriever.NewHybrid(runbooks, embedder, store, cfg.RAG.CandidateK)
+	if cfg.RAG.Reranker.Enabled {
+		h.WithReranker(reranker.NewTEI(cfg.RAG.Reranker.BaseURL, cfg.RAG.Reranker.APIKey), cfg.RAG.CandidateK)
+	}
 	if err := h.Index(ctx); err != nil {
 		return nil, fmt.Errorf("index knowledge: %w", err)
 	}

@@ -42,6 +42,11 @@ vector_store:
 rag:
   top_k: 8
   candidate_k: 20
+  # 可选的 cross-encoder 重排；启用后调用失败会直接返回错误，不降级到 RRF。
+  reranker:
+    enabled: ${RERANK_ENABLED}
+    base_url: ${RERANK_BASE_URL}
+    api_key: ${RERANK_API_KEY}
 
 # Agent 运行时约束。timeout_seconds 为整轮诊断超时（覆盖全部步骤与工具调用），
 # 单次工具调用超时由 tool.timeout_seconds 控制。

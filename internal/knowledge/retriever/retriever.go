@@ -32,13 +32,20 @@ type Retriever interface {
 	Retrieve(ctx context.Context, query string, topK int) ([]Result, error)
 }
 
+// Reranker 对第一阶段候选片段进行相关性重排。
+type Reranker interface {
+	Rerank(ctx context.Context, query string, documents []string) ([]float64, error)
+}
+
 // Hybrid 是混合检索器（BM25 + 向量，RRF 融合）。
 type Hybrid struct {
-	chunks     []*kmodel.Chunk
-	embedder   embedding.Embedder
-	vector     vectorstore.VectorStore
-	rrfK       int
-	candidateK int // 向量检索候选集大小（远小于全量 chunks）
+	chunks           []*kmodel.Chunk
+	embedder         embedding.Embedder
+	vector           vectorstore.VectorStore
+	reranker         Reranker
+	rrfK             int
+	candidateK       int // 向量检索候选集大小（远小于全量 chunks）
+	rerankCandidateK int // RRF 后交给重排器的候选集大小
 }
 
 // NewHybrid 创建混合检索器。candidateK 为向量检索候选集大小，
@@ -48,6 +55,16 @@ func NewHybrid(chunks []*kmodel.Chunk, embedder embedding.Embedder, vector vecto
 		candidateK = 20
 	}
 	return &Hybrid{chunks: chunks, embedder: embedder, vector: vector, rrfK: 60, candidateK: candidateK}
+}
+
+// WithReranker 为混合检索器启用候选重排。候选数默认复用向量 candidateK。
+func (h *Hybrid) WithReranker(reranker Reranker, candidateK int) *Hybrid {
+	if candidateK <= 0 {
+		candidateK = h.candidateK
+	}
+	h.reranker = reranker
+	h.rerankCandidateK = candidateK
+	return h
 }
 
 // Index 增量向量化 chunks 并写入向量存储。
@@ -147,7 +164,37 @@ func (h *Hybrid) Retrieve(ctx context.Context, query string, topK int) ([]Result
 			list = append(list, scored{chunk: c, score: s})
 		}
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].score > list[j].score })
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].score == list[j].score {
+			return list[i].chunk.ID < list[j].chunk.ID
+		}
+		return list[i].score > list[j].score
+	})
+	if h.reranker != nil && len(list) > 0 {
+		candidateK := h.rerankCandidateK
+		if candidateK < topK {
+			candidateK = topK
+		}
+		if candidateK > len(list) {
+			candidateK = len(list)
+		}
+		list = list[:candidateK]
+		documents := make([]string, len(list))
+		for i, candidate := range list {
+			documents[i] = candidate.chunk.Title + "\n" + candidate.chunk.Content
+		}
+		rerankScores, err := h.reranker.Rerank(ctx, query, documents)
+		if err != nil {
+			return nil, fmt.Errorf("rerank candidates: %w", err)
+		}
+		if len(rerankScores) != len(list) {
+			return nil, fmt.Errorf("reranker returned %d scores for %d candidates", len(rerankScores), len(list))
+		}
+		for i := range list {
+			list[i].score = rerankScores[i]
+		}
+		sort.SliceStable(list, func(i, j int) bool { return list[i].score > list[j].score })
+	}
 	if topK < len(list) {
 		list = list[:topK]
 	}

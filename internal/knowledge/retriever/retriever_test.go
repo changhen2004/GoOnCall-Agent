@@ -67,6 +67,15 @@ func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, er
 	return out, nil
 }
 
+type stubReranker struct {
+	scores []float64
+	err    error
+}
+
+func (s stubReranker) Rerank(context.Context, string, []string) ([]float64, error) {
+	return s.scores, s.err
+}
+
 // countingEmbedder 统计 Embedding 调用次数，验证增量索引跳过未变化 chunk。
 type countingEmbedder struct {
 	*fakeEmbedder
@@ -171,6 +180,48 @@ func TestHybridRetrieve_TopK(t *testing.T) {
 	results, _ := h.Retrieve(context.Background(), "aaa", 2)
 	if len(results) != 2 {
 		t.Fatalf("len = %d, want 2", len(results))
+	}
+}
+
+func TestHybridRetrieve_ReranksRRFShortlist(t *testing.T) {
+	chunks := []*kmodel.Chunk{
+		{ID: "a#0", Title: "队列积压", Content: "rabbitmq queue backlog"},
+		{ID: "b#0", Title: "消费者掉线", Content: "rabbitmq consumer disconnected"},
+	}
+	embedder := &fakeEmbedder{vectors: map[string][]float32{
+		"rabbitmq queue backlog":         {1, 0},
+		"rabbitmq consumer disconnected": {0.8, 0.2},
+		"rabbitmq backlog":               {1, 0},
+	}}
+	h := NewHybrid(chunks, embedder, vectorstore.NewMemory(), 2).
+		WithReranker(stubReranker{scores: []float64{0.1, 0.9}}, 2)
+	if err := h.Index(context.Background()); err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+
+	results, err := h.Retrieve(context.Background(), "rabbitmq backlog", 1)
+	if err != nil {
+		t.Fatalf("Retrieve() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Chunk.ID != "b#0" || results[0].Score != 0.9 {
+		t.Fatalf("results = %+v, want reranked b#0", results)
+	}
+}
+
+func TestHybridRetrieve_ReturnsRerankerError(t *testing.T) {
+	failure := errors.New("reranker unavailable")
+	chunks := []*kmodel.Chunk{{ID: "a#0", Content: "rabbitmq backlog"}}
+	embedder := &fakeEmbedder{vectors: map[string][]float32{
+		"rabbitmq backlog": {1, 0},
+	}}
+	h := NewHybrid(chunks, embedder, vectorstore.NewMemory(), 1).
+		WithReranker(stubReranker{err: failure}, 1)
+	if err := h.Index(context.Background()); err != nil {
+		t.Fatalf("Index() error = %v", err)
+	}
+
+	if results, err := h.Retrieve(context.Background(), "rabbitmq backlog", 1); results != nil || !errors.Is(err, failure) {
+		t.Fatalf("Retrieve() = %v, %v; want reranker error", results, err)
 	}
 }
 

@@ -141,7 +141,15 @@ type RAGConfig struct {
 	TopK int `yaml:"top_k"`
 	// CandidateK 向量检索的候选集大小（默认 20）。
 	// 远小于全量 chunks，避免每次查询都按整个知识库做向量 topK。
-	CandidateK int `yaml:"candidate_k"`
+	CandidateK int            `yaml:"candidate_k"`
+	Reranker   RerankerConfig `yaml:"reranker"`
+}
+
+// RerankerConfig 是可选的 TEI cross-encoder 重排配置。
+type RerankerConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
 }
 
 // AgentConfig 是 Agent 运行时约束配置。
@@ -347,6 +355,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Verification.IntervalSeconds < 0 {
 		return fmt.Errorf("verification.interval_seconds must be >= 0")
+	}
+	if c.RAG.TopK < 1 {
+		return fmt.Errorf("rag.top_k must be >= 1")
+	}
+	if c.RAG.CandidateK < 1 {
+		return fmt.Errorf("rag.candidate_k must be >= 1")
+	}
+	if c.RAG.Reranker.Enabled && strings.TrimSpace(c.RAG.Reranker.BaseURL) == "" {
+		return fmt.Errorf("rag.reranker.base_url is required when reranker is enabled")
 	}
 
 	if c.Execution.Mode != ExecutionModeHTTP {

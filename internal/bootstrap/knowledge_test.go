@@ -36,6 +36,17 @@ func TestBuildRetriever_RequiresConfiguration(t *testing.T) {
 	}
 }
 
+func TestBuildRetriever_RequiresEnabledRerankerURL(t *testing.T) {
+	cfg := config.Default()
+	cfg.LLM.BaseURL = "http://embedding.invalid/v1"
+	cfg.Qdrant.URL = "http://qdrant.invalid:6334"
+	cfg.RAG.Reranker.Enabled = true
+
+	if _, err := BuildRunbookRetriever(cfg); err == nil || !strings.Contains(err.Error(), "RERANK_BASE_URL") {
+		t.Fatalf("BuildRunbookRetriever() error = %v, want reranker URL error", err)
+	}
+}
+
 func TestQdrantAddress(t *testing.T) {
 	for _, tc := range []struct {
 		raw, host string
