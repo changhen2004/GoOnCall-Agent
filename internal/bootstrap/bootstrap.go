@@ -49,6 +49,11 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
+	ragRetriever, err := buildRetriever(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	dbs, err := buildDatabases(cfg)
 	if err != nil {
 		return nil, err
@@ -72,10 +77,6 @@ func New() (*App, error) {
 		return nil, err
 	}
 
-	ragRetriever, err := buildRetriever(cfg)
-	if err != nil {
-		return nil, err
-	}
 	reg := buildToolRegistry(cfg, dbs.incidentRepo, ragRetriever)
 	if t, err := restartTool.EinoTool(); err == nil {
 		_ = reg.Register(t, registry.RiskMedium)

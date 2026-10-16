@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"gooncall-agent/internal/config"
 	"gooncall-agent/internal/knowledge/embedding"
@@ -14,72 +17,80 @@ import (
 	"gooncall-agent/internal/knowledge/vectorstore"
 )
 
-// buildRetriever 构建 RAG 混合检索器（未配置 LLM/Embedding 时返回 nil）。
+// buildRetriever 构建 RAG 混合检索器；配置或索引失败直接阻止启动。
 func buildRetriever(cfg *config.Config) (retriever.Retriever, error) {
-	if cfg.LLM.BaseURL == "" || cfg.LLM.EmbeddingModel == "" {
-		slog.Warn("RAG disabled (LLM_BASE_URL / LLM_EMBEDDING_MODEL empty), runbook.search uses lexical search")
-		return nil, nil
+	if strings.TrimSpace(cfg.LLM.BaseURL) == "" {
+		return nil, fmt.Errorf("llm.base_url (LLM_BASE_URL) is required for RAG")
+	}
+	if strings.TrimSpace(cfg.LLM.EmbeddingModel) == "" {
+		return nil, fmt.Errorf("llm.embedding_model (LLM_EMBEDDING_MODEL) is required for RAG")
 	}
 
 	embedder := embedding.NewOpenAIEmbedder(cfg.LLM.BaseURL, cfg.LLM.APIKey, cfg.LLM.EmbeddingModel)
 
-	store, err := buildVectorStore(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	store, err := buildVectorStore(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	ld := loader.New("docs", splitter.New(1000))
-	chunks, err := ld.Load(context.Background())
+	chunks, err := ld.Load(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load knowledge docs: %w", err)
 	}
 	if len(chunks) == 0 {
-		slog.Warn("no knowledge docs found under docs/")
-		return nil, nil
+		return nil, fmt.Errorf("no knowledge docs found under docs/")
 	}
 
 	h := retriever.NewHybrid(chunks, embedder, store, cfg.RAG.CandidateK)
-	if err := h.Index(context.Background()); err != nil {
-		// 向量索引失败（embedding 服务不可用 / 模型不存在等）时降级：
-		// 返回 nil，runbook.search 回退本地词法检索，不阻断 Agent 诊断。
-		// （与 OnCallAgent 的降级策略一致：外部索引失败只记录日志。）
-		slog.Warn("index knowledge failed, fallback to lexical runbook search", "error", err)
-		return nil, nil
+	if err := h.Index(ctx); err != nil {
+		return nil, fmt.Errorf("index knowledge: %w", err)
 	}
 	return h, nil
 }
 
-// buildVectorStore 按配置构建向量存储（memory / qdrant）。
-func buildVectorStore(cfg *config.Config) (vectorstore.VectorStore, error) {
-	switch cfg.VectorStore.Provider {
-	case "qdrant":
-		host := qdrantHost(cfg.Qdrant.URL)
-		qs, err := vectorstore.NewQdrant(host, 6334, cfg.Qdrant.Collection, cfg.Qdrant.Dim)
-		if err != nil {
-			return nil, fmt.Errorf("create qdrant store: %w", err)
-		}
-		if err := qs.EnsureCollection(context.Background()); err != nil {
-			return nil, fmt.Errorf("ensure qdrant collection: %w", err)
-		}
-		slog.Info("vector store: qdrant", "collection", cfg.Qdrant.Collection)
-		return qs, nil
-	default:
-		slog.Info("vector store: memory")
-		return vectorstore.NewMemory(), nil
+// buildVectorStore 使用显式配置的 Qdrant；内存向量库仅用于单元测试。
+func buildVectorStore(ctx context.Context, cfg *config.Config) (vectorstore.VectorStore, error) {
+	if cfg.VectorStore.Provider != "qdrant" {
+		return nil, fmt.Errorf("vector_store.provider must be qdrant")
 	}
+	host, port, err := qdrantAddress(cfg.Qdrant.URL)
+	if err != nil {
+		return nil, err
+	}
+	qs, err := vectorstore.NewQdrant(host, port, cfg.Qdrant.Collection, cfg.Qdrant.Dim)
+	if err != nil {
+		return nil, fmt.Errorf("create qdrant store: %w", err)
+	}
+	if err := qs.EnsureCollection(ctx); err != nil {
+		return nil, fmt.Errorf("ensure qdrant collection: %w", err)
+	}
+	slog.Info("vector store: qdrant", "collection", cfg.Qdrant.Collection)
+	return qs, nil
 }
 
-// qdrantHost 从 URL 提取主机（去掉 scheme 与端口）。
-func qdrantHost(rawURL string) string {
-	u := rawURL
-	if i := strings.Index(u, "://"); i >= 0 {
-		u = u[i+3:]
+// qdrantAddress 解析 gRPC 地址，省略端口时使用 6334。
+func qdrantAddress(rawURL string) (string, int, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", 0, fmt.Errorf("qdrant.url (QDRANT_URL) is required for RAG")
 	}
-	if i := strings.Index(u, "/"); i >= 0 {
-		u = u[:i]
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "http://" + rawURL
 	}
-	if i := strings.LastIndex(u, ":"); i >= 0 {
-		u = u[:i]
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "http" || u.Hostname() == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return "", 0, fmt.Errorf("qdrant.url must be a gRPC endpoint: host[:port] or http://host[:port]")
 	}
-	return u
+	port := 6334
+	if u.Port() != "" {
+		port, err = strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return "", 0, fmt.Errorf("qdrant.url port must be between 1 and 65535")
+		}
+	}
+	return u.Hostname(), port, nil
 }

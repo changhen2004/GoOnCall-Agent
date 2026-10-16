@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -69,14 +70,16 @@ func (h *Hybrid) Index(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if len(vecs) != 1 {
-			continue
+		if len(vecs) != 1 || len(vecs[0]) == 0 {
+			return fmt.Errorf("embed chunk %s: expected one non-empty vector", c.ID)
 		}
-		_ = h.vector.Upsert(ctx, []vectorstore.Point{{
+		if err := h.vector.Upsert(ctx, []vectorstore.Point{{
 			ID:      c.ID,
 			Vector:  vecs[0],
 			Payload: map[string]any{"source": c.Source, "doc_type": c.DocType, "chunk_hash": hash},
-		}})
+		}}); err != nil {
+			return fmt.Errorf("upsert chunk %s: %w", c.ID, err)
+		}
 		embedded++
 	}
 	slog.Info("knowledge index", "chunks", len(h.chunks), "embedded", embedded, "skipped", skipped)
@@ -160,8 +163,8 @@ func (h *Hybrid) vectorRanks(ctx context.Context, query string, k int) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	if len(vecs) == 0 {
-		return map[string]int{}, nil
+	if len(vecs) != 1 || len(vecs[0]) == 0 {
+		return nil, fmt.Errorf("embed query: expected one non-empty vector")
 	}
 	results, err := h.vector.Search(ctx, vecs[0], k)
 	if err != nil {

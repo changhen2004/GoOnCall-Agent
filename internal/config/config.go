@@ -253,7 +253,7 @@ func Default() *Config {
 			},
 		},
 		VectorStore: VectorStoreConfig{
-			Provider: "memory",
+			Provider: "qdrant",
 		},
 		Tool: ToolConfig{
 			TimeoutSeconds: 30,

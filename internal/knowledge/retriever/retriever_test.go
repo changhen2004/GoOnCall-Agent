@@ -2,6 +2,7 @@ package retriever
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -9,6 +10,46 @@ import (
 	kmodel "gooncall-agent/internal/knowledge/model"
 	"gooncall-agent/internal/knowledge/vectorstore"
 )
+
+type stubEmbedder struct {
+	vecs [][]float32
+	err  error
+}
+
+func (s stubEmbedder) Embed(context.Context, []string) ([][]float32, error) { return s.vecs, s.err }
+
+type failingUpsertStore struct {
+	vectorstore.VectorStore
+	err error
+}
+
+func (s failingUpsertStore) Upsert(context.Context, []vectorstore.Point) error { return s.err }
+
+func TestHybrid_ReturnsDependencyErrors(t *testing.T) {
+	ctx := context.Background()
+	chunks := []*kmodel.Chunk{{ID: "a", Content: "rabbitmq"}}
+	failure := errors.New("dependency unavailable")
+	h := NewHybrid(chunks, stubEmbedder{vecs: [][]float32{{1, 0}}}, failingUpsertStore{vectorstore.NewMemory(), failure}, 5)
+	if err := h.Index(ctx); !errors.Is(err, failure) {
+		t.Fatalf("Index = %v; want upsert error", err)
+	}
+	h = NewHybrid(chunks, stubEmbedder{err: failure}, vectorstore.NewMemory(), 5)
+	if err := h.Index(ctx); !errors.Is(err, failure) {
+		t.Fatalf("Index = %v; want embedding error", err)
+	}
+	if got, err := h.Retrieve(ctx, "rabbitmq", 5); got != nil || !errors.Is(err, failure) {
+		t.Fatalf("Retrieve = %v, %v; must not fall back to lexical hits", got, err)
+	}
+	for _, vecs := range [][][]float32{nil, {nil}, {{1}, {2}}} {
+		h := NewHybrid(chunks, stubEmbedder{vecs: vecs}, vectorstore.NewMemory(), 5)
+		if err := h.Index(ctx); err == nil {
+			t.Fatalf("Index accepted malformed vectors: %v", vecs)
+		}
+		if _, err := h.Retrieve(ctx, "rabbitmq", 5); err == nil {
+			t.Fatalf("Retrieve accepted malformed vectors: %v", vecs)
+		}
+	}
+}
 
 type fakeEmbedder struct {
 	vectors map[string][]float32

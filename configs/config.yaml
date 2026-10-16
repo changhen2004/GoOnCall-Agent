@@ -29,12 +29,13 @@ prometheus:
   url: ${PROMETHEUS_URL}
 
 qdrant:
+  # gRPC 地址，如 http://localhost:6334；省略端口时默认 6334。
   url: ${QDRANT_URL}
   collection: gooncall_knowledge
   dim: 1536
 
 vector_store:
-  provider: memory
+  provider: qdrant
 
 # RAG 混合检索。candidate_k 为向量检索候选集大小，远小于知识库 chunk 总量，
 # 避免每次查询按全量 chunks 做向量 topK（chunk 数量大时显著影响性能）。

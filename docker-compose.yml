@@ -16,8 +16,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Redis / Qdrant 不在默认启动范围内：闭环不依赖它们（指纹去重走 PostgreSQL，
-  # RAG 默认使用内存向量库）。需要时用 --profile rag 显式启用。
+  # Redis 为可选组件，用 --profile rag 显式启用；RAG 启动必须连接 Qdrant。
   redis:
     profiles: ["rag"]
     image: redis:7-alpine
@@ -44,7 +43,6 @@ services:
       retries: 10
 
   qdrant:
-    profiles: ["rag"]
     # 固定版本，避免 latest 未来 breaking change
     image: qdrant/qdrant:v1.19.0
     ports:
@@ -114,11 +112,12 @@ services:
       RESTART_WORKER_URL: ${RESTART_WORKER_URL:-}
       RESTART_WORKER_TOKEN: ${RESTART_WORKER_TOKEN:-}
       RESTART_WORKER_ALLOWED_TARGETS: ${RESTART_WORKER_ALLOWED_TARGETS:-}
-      # LLM 配置（为空则不装配诊断 Agent，analyze 仅做状态流转）。
+      # RAG 必须配置 embedding 服务与模型；LLM_MODEL 用于诊断 Agent。
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -128,6 +127,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
   gooncall-worker:
     build:
@@ -149,11 +150,12 @@ services:
       RESTART_WORKER_URL: ${RESTART_WORKER_URL:-}
       RESTART_WORKER_TOKEN: ${RESTART_WORKER_TOKEN:-}
       RESTART_WORKER_ALLOWED_TARGETS: ${RESTART_WORKER_ALLOWED_TARGETS:-}
-      # LLM 配置（为空则不装配诊断 Agent，仅做状态流转）。
+      # RAG 必须配置 embedding 服务与模型；LLM_MODEL 用于诊断 Agent。
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -161,6 +163,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      qdrant:
+        condition: service_started
 
 volumes:
   postgres_data:

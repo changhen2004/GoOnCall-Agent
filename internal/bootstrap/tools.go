@@ -19,12 +19,7 @@ func buildToolRegistry(cfg *config.Config, repo repository.Repository, rag retri
 		_ = reg.Register(t, registry.RiskLow)
 	}
 
-	var runbookTool *runbook.Tool
-	if rag != nil {
-		runbookTool = runbook.NewWithRetriever(rag, cfg.RAG.TopK)
-	} else {
-		runbookTool = runbook.New("docs")
-	}
+	runbookTool := runbook.NewWithRetriever(rag, cfg.RAG.TopK)
 	if t, err := runbookTool.EinoTool(); err == nil {
 		_ = reg.Register(t, registry.RiskLow)
 	}

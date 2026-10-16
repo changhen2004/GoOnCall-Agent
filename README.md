@@ -11,9 +11,9 @@ GoOnCall Agent 把运维告警处理做成一条可审计的自动链路。Alert
 ## 功能
 
 - **Incident 生命周期**：告警 webhook 创建 / 关闭工单；创建后自动发布 `agent.requested`（告警即诊断）；同一指纹只允许一条非终态 Incident，终态后复发创建**新的** Incident（新周期、新 ID）；状态迁移由 `version` 乐观锁与严格状态机保护，冲突返回 409。
-- **ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 LLM 时自动降级（`analyze` 仅做状态流转）。
+- **ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 `LLM_MODEL` 时不装配诊断 Agent（`analyze` 仅做状态流转）。
 - **工具集**（按配置启用）：`prometheus_query`、`prometheus_alerts`、`prometheus_range_query`、`rabbitmq_inspect`、`runbook_search`、`incident_history`、`worker_restart`。
-- **RAG 混合检索**：Markdown 加载 → 分块 → Embedding → 向量库（内存或 Qdrant）→ 词法 + 向量混合检索（RRF 融合）；向量候选集大小可配置，避免全量扫描；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。
+- **RAG 混合检索**：Markdown 加载 → 标题 / 段落 / 句子递归分块（按 Unicode 字符计数）→ Embedding → Qdrant → 词法 + 向量混合检索（RRF 融合）；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。缺少 embedding 服务 / 模型 / Qdrant 地址，或连接、索引失败时直接报错，不降级；内存向量库仅用于单元测试。
 - **Run 记录与实时事件**：AgentRun / Step / ToolCall 持久化，任一关键审计写入失败都会让本轮诊断失败而非静默成功；同一 Incident 已有活动 Run 时，重复消息直接成功确认，不按时间阈值抢占执行。SSE 推送 Run / Step / Tool 事件；支持 `max_steps`、`max_tool_calls`、整轮诊断超时与单次工具超时。
 - **HITL 人工审批**：风险策略判定 → 审批（批准 / 拒绝）→ 批准后执行。执行权通过数据库条件更新（CAS）获得：`PENDING → APPROVED → EXECUTING → EXECUTED/FAILED/UNKNOWN`，并发或重复批准返回 409 且不会二次执行；`EXPIRED` 表示 Incident 已外部恢复或不再允许执行，`UNKNOWN` 表示外部动作结果未知，两者都需要人工核对，不自动重试。
 - **处置与连续验证**：审批通过 → 执行 `worker_restart`（`execution.mode=mock` 为模拟执行；`mode=http` 调用固定 URL 的 HTTP 适配器，带 Bearer Token 与 `Idempotency-Key: <approval_id>`，target 受白名单限制）→ **连续**验证 `required_successes` 次全部通过才 `RESOLVED` 并生成 Postmortem；采集错误、空结果、`NaN`/`Inf`、验证失败一律进 `FAILED`，绝不按 0 处理。
@@ -66,16 +66,16 @@ stateDiagram-v2
 ### 方式一：本地运行（推荐）
 
 ```bash
-make up                      # 启动 postgres / rabbitmq / prometheus / alertmanager / grafana
-                             # Redis / Qdrant 不在默认范围内：需要时用
-                             # `EXECUTION_MODE=mock docker compose --profile rag up -d`
+make up                      # 启动 postgres / rabbitmq / qdrant / prometheus / alertmanager / grafana
 
 export POSTGRES_DSN='postgres://gooncall:gooncall@localhost:5432/gooncall?sslmode=disable'
 export RABBITMQ_URL='amqp://gooncall:gooncall@localhost:5672/'
 export EXECUTION_MODE=mock
-# 可选：配置 LLM 后才会装配诊断 Agent；不配置时 analyze 仅做状态流转
+# RAG 必须配置 embedding 服务、模型与 Qdrant gRPC 地址
 export LLM_BASE_URL='https://api.openai.com/v1'
 export LLM_API_KEY='sk-...'
+export LLM_EMBEDDING_MODEL='text-embedding-3-small'
+export QDRANT_URL='http://localhost:6334'
 export LLM_MODEL='gpt-4o'
 
 go run ./cmd/api             # API，默认 :8080
@@ -88,7 +88,9 @@ go run ./cmd/worker          # Worker（消费事件并运行 Agent）
 ### 方式二：Docker Compose 全量启动
 
 ```bash
-EXECUTION_MODE=mock docker compose up -d --build
+# 先设置 LLM_BASE_URL / LLM_API_KEY / LLM_EMBEDDING_MODEL / LLM_MODEL。
+# 容器内使用服务名连接 Qdrant；不要沿用本地运行时的 localhost。
+QDRANT_URL=http://qdrant:6334 EXECUTION_MODE=mock docker compose up -d --build
 ```
 
 PostgreSQL 容器只在首次创建数据卷时按顺序执行 `migrations/*.sql`。升级已有数据库时，请在启动 API / Worker 前由发布流程只执行尚未应用的 SQL 迁移；服务进程不会自动改 schema。
@@ -122,14 +124,15 @@ EXECUTION_MODE=mock SERVER_PORT=8082 go run ./cmd/api   # 终端 A
 | `POSTGRES_DSN` | PostgreSQL DSN，未设置时回退内存仓库（仅 Demo） |
 | `RABBITMQ_URL` / `RABBITMQ_MANAGEMENT_URL` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | RabbitMQ 连接与队列检查 |
 | `PROMETHEUS_URL` | Agent 工具与验证采集使用的 Prometheus |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_EMBEDDING_MODEL` | LLM 配置，为空则不装配诊断 Agent |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_EMBEDDING_MODEL` | RAG 必须配置 Base URL 与 embedding 模型；API Key 按服务要求设置；`LLM_MODEL` 用于诊断 Agent |
 | `ALERT_WEBHOOK_TOKEN` / `API_READ_TOKEN` / `API_ADMIN_TOKEN` / `API_ADMIN_ACTOR` | 三类最小认证 Token 与审批人标识 |
 | `EXECUTION_MODE` | 处置通道：`mock`（显式 Demo，模拟重启）/ `http`（固定 URL 真实处置）；必须设置 |
 | `RESTART_WORKER_URL` / `RESTART_WORKER_TOKEN` | `execution.mode=http` 时的固定处置 endpoint 与 Bearer Token |
 | `RESTART_WORKER_ALLOWED_TARGETS` | 允许重启的 target 白名单（逗号分隔，`http` 模式必填） |
 | `VERIFICATION_MODE` | 验证采集器：`mock`（默认）/ `prometheus` |
 | `CONFIG_PATH` | 配置文件路径，默认 `configs/config.yaml` |
-| `REDIS_ADDR` / `REDIS_PASSWORD` / `QDRANT_URL` | 可选 RAG 组件；默认不启动、也不参与闭环 |
+| `QDRANT_URL` | 必填的 Qdrant gRPC 地址，如 `http://localhost:6334`；省略端口时默认 6334 |
+| `REDIS_ADDR` / `REDIS_PASSWORD` | 可选 Redis 组件，不参与闭环 |
 
 `configs/config.yaml` 另含：`agent`（`max_steps`、`max_tool_calls`、整轮 `timeout_seconds`）、`tool.timeout_seconds`、`execution.timeout_seconds`，以及 `verification.attempts` / `interval_seconds` / `required_successes`（连续验证次数与间隔）。
 
@@ -254,9 +257,5 @@ CI（`.github/workflows/ci.yml`）执行 `go mod tidy` 检查、`gofmt` 格式�
 - **SSE 是单进程实验能力**：事件只在本进程内存广播，多副本部署时不会跨进程同步；生产闭环请使用持久化查询 API（`/incidents/:id/events`、`/runs/:id/tool-calls`、`/approvals?status=PENDING`）。
 - **只支持一种自动处置**：`restart_worker`。LLM 只能请求创建审批，不能提供 URL、命令或凭证。
 - **不包含**：前端、通知平台、Outbox、多 Agent 编排（Supervisor 仅为角色占位）、token 级流式输出、向量 RAG 调优。
-- 去重与审计基于 PostgreSQL（部分唯一索引 + 审计事件）；schema 只由 `migrations/*.sql` 管理，应在 API / Worker 启动前完成。Redis 仅作为可选 RAG 组件，不参与闭环。
+- 去重与审计基于 PostgreSQL（部分唯一索引 + 审计事件）；schema 只由 `migrations/*.sql` 管理，应在 API / Worker 启动前完成。Qdrant 为 RAG 启动依赖；Redis 为可选组件，不参与闭环。
 - `deploy/k8s` 为空占位，目前仅提供 Docker Compose 部署。
-
-## 设计文档
-
-完整设计见《GoOnCall-Agent-v1.0-技术设计文档.md》。其中开发阶段与验收标准为规划内容，实际能力以本 README 的「功能」与「实现边界」为准。
