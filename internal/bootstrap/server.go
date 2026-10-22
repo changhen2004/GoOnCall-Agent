@@ -15,14 +15,19 @@ import (
 // buildServer 构建 HTTP 引擎。
 func (a *App) buildServer() *gin.Engine {
 	incidentHandler := handler.NewIncidentHandler(a.incidentSvc).
-		WithDiagnoser(a.diagnoser, a.prompt).
-		WithPublisher(a)
+		WithDiagnoser(a.diagnoser, a.prompt)
+	if a.producer != nil {
+		incidentHandler.WithPublisher(a)
+	}
 	// Run 查询接口需要 Incident 仓库做父资源存在性校验（/incidents/:id/runs）。
 	runHandler := handler.NewRunHandler(a.runRepo, a.broker).WithIncidentRepository(a.incidentRepo)
 	approvalHandler := handler.NewApprovalHandler(a.approvalSvc)
 	// AlertManager webhook：创建 Incident 后自动发布 agent.requested（全自动诊断链路）。
 	// Run 仓库用于命中去重时判断诊断是否已启动（未启动才允许重新发布）。
-	alertHandler := handler.NewAlertHandler(a.incidentSvc).WithPublisher(a).WithRunRepository(a.runRepo)
+	alertHandler := handler.NewAlertHandler(a.incidentSvc).WithRunRepository(a.runRepo)
+	if a.producer != nil {
+		alertHandler.WithPublisher(a)
+	}
 
 	engine := router.New(incidentHandler, a.buildHealthHandler(), runHandler, approvalHandler, alertHandler, middleware.AuthConfig{
 		WebhookToken: a.cfg.Auth.WebhookToken,

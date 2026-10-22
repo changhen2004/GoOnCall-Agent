@@ -13,9 +13,19 @@ import (
 	agentruntime "gooncall-agent/internal/agent/runtime"
 	"gooncall-agent/internal/config"
 	"gooncall-agent/internal/execution/approval"
+	"gooncall-agent/internal/incident/model"
 	"gooncall-agent/internal/incident/repository"
 	incidentservice "gooncall-agent/internal/incident/service"
 )
+
+type syncDiagnoser struct {
+	calls int
+}
+
+func (d *syncDiagnoser) Diagnose(context.Context, *model.Incident, string) (*agentruntime.DiagnosisResult, error) {
+	d.calls++
+	return &agentruntime.DiagnosisResult{RunID: "run_sync", Conclusion: "同步诊断完成"}, nil
+}
 
 // readyApp 装配一个只用于 /readyz 的最小 App（handler 不参与就绪检查）。
 func readyApp(t *testing.T, cfg *config.Config) *App {
@@ -96,5 +106,36 @@ func TestReadyz_UnavailablePostgresIsNotReady(t *testing.T) {
 	checks, _ := body["checks"].(map[string]any)
 	if checks["postgres"] != "unavailable" {
 		t.Fatalf("checks = %v, want postgres unavailable", checks)
+	}
+}
+
+// TestBuildServer_UsesSynchronousDiagnosisWithoutProducer 验证未启用消息发布时不会跳过同步诊断。
+func TestBuildServer_UsesSynchronousDiagnosisWithoutProducer(t *testing.T) {
+	a := readyApp(t, config.Default())
+	diagnoser := &syncDiagnoser{}
+	a.diagnoser = diagnoser
+	a.prompt = "诊断提示词"
+	inc, _, err := a.incidentSvc.Create(context.Background(), incidentservice.CreateIncidentInput{
+		Service: "rabbitmq",
+		Title:   "队列积压",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	a.buildServer().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/incidents/"+inc.ID+"/analyze", nil))
+	if w.Code != http.StatusOK || diagnoser.calls != 1 {
+		t.Fatalf("analyze = %d, calls = %d, body = %s", w.Code, diagnoser.calls, w.Body.String())
+	}
+	var body struct {
+		Diagnosis *agentruntime.DiagnosisResult `json:"diagnosis"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode analyze response: %v", err)
+	}
+	if body.Diagnosis == nil || body.Diagnosis.Conclusion != "同步诊断完成" {
+		t.Fatalf("diagnosis = %+v", body.Diagnosis)
 	}
 }
