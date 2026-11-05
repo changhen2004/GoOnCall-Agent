@@ -6,8 +6,6 @@
 
 GoOnCall Agent 把运维告警处理做成一条可审计的自动链路。Alertmanager 的 webhook 创建 Incident 后，系统通过 RabbitMQ 触发诊断 Agent；Agent 以 ReAct 方式调用工具（Prometheus、RabbitMQ、Runbook、历史 Incident）收集证据并定位根因，产出处置建议。涉及变更的操作先进入人工审批，批准后才执行，再通过指标**连续验证**结果，通过则自动关闭 Incident 并生成 Postmortem。全过程落库并通过持久化查询 API 可查（SSE 仅是单进程实时视图）。
 
-> **能力边界先说清楚**：本地 Demo 必须显式设置 `EXECUTION_MODE=mock`，此时处置为模拟执行且可不启用认证。要得到“真实处置、可查、可审计、不可重复批准”的可靠闭环，必须按「生产闭环配置」配置持久化、消息、LLM、Token、`execution.mode=http` 与 `verification.mode=prometheus`。
-
 ## 功能
 
 - **Incident 生命周期**：告警 webhook 创建 / 关闭工单；创建后自动发布 `agent.requested`（告警即诊断）；同一指纹只允许一条非终态 Incident，终态后复发创建**新的** Incident（新周期、新 ID）；状态迁移由 `version` 乐观锁与严格状态机保护，冲突返回 409。
@@ -95,28 +93,7 @@ QDRANT_URL=http://qdrant:6334 EXECUTION_MODE=mock docker compose up -d --build
 
 PostgreSQL 容器只在首次创建数据卷时按顺序执行 `migrations/*.sql`。升级已有数据库时，请在启动 API / Worker 前由发布流程只执行尚未应用的 SQL 迁移；服务进程不会自动改 schema。
 
-### 端到端 Demo
-
-```bash
-EXECUTION_MODE=mock SERVER_PORT=8082 go run ./cmd/api   # 终端 A
-./scripts/demo.sh                   # 终端 B：模拟告警 → 查看 Incident → 分析 → 告警恢复
-```
-
-| 服务 | 地址 | 默认凭据 |
-|---|---|---|
-| 后端 API | http://localhost:8080 | - |
-| 健康检查 | http://localhost:8080/healthz · `/readyz` | - |
-| Prometheus | http://localhost:9090 | - |
-| Alertmanager | http://localhost:9093 | - |
-| Grafana | http://localhost:3000 | `admin` / `admin` |
-| RabbitMQ 管理台 | http://localhost:15672 | `gooncall` / `gooncall` |
-| Qdrant | http://localhost:6333 | - |
-
-> 与 GoCommunity 共存时，为 Grafana 指定 `GRAFANA_PORT=3005` 启动。
-
 ## 配置
-
-仓库跟踪 `configs/config.example.yaml` 模板；本机正式配置为 `configs/config.local.yaml`，默认由 API、Worker 和 RAG 评测加载且不会提交到 Git。首次使用可执行：
 
 ```bash
 cp configs/config.example.yaml configs/config.local.yaml
@@ -124,35 +101,7 @@ cp configs/config.example.yaml configs/config.local.yaml
 
 Docker 镜像只复制模板，并在容器内保存为 `/app/configs/config.yaml`；Compose 通过环境变量注入正式值。本机配置和 `.env` 均被排除在构建上下文之外。
 
-| 变量 | 说明 |
-|---|---|
-| `SERVER_PORT` | API 监听端口，默认 8080 |
-| `POSTGRES_DSN` | PostgreSQL DSN，未设置时回退内存仓库（仅 Demo） |
-| `RABBITMQ_URL` / `RABBITMQ_MANAGEMENT_URL` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | RabbitMQ 连接与队列检查 |
-| `PROMETHEUS_URL` | Agent 工具与验证采集使用的 Prometheus |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | 诊断 Agent 使用的大模型地址、凭据与模型 |
-| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | RAG 使用的独立 Embedding 地址、凭据与模型 |
-| `RERANK_ENABLED` / `RERANK_PROVIDER` / `RERANK_BASE_URL` / `RERANK_API_KEY` / `RERANK_MODEL` | 可选候选重排；`provider` 支持 `tei`（默认）或 `qwen`（DashScope 协议，API Key 与模型必填） |
-| `ALERT_WEBHOOK_TOKEN` / `API_READ_TOKEN` / `API_ADMIN_TOKEN` / `API_ADMIN_ACTOR` | 三类最小认证 Token 与审批人标识 |
-| `EXECUTION_MODE` | 处置通道：`mock`（显式 Demo，模拟重启）/ `http`（固定 URL 真实处置）；必须设置 |
-| `RESTART_WORKER_URL` / `RESTART_WORKER_TOKEN` | `execution.mode=http` 时的固定处置 endpoint 与 Bearer Token |
-| `RESTART_WORKER_ALLOWED_TARGETS` | 允许重启的 target 白名单（逗号分隔，`http` 模式必填） |
-| `VERIFICATION_MODE` | 验证采集器：`mock`（默认）/ `prometheus` |
-| `CONFIG_PATH` | 配置文件路径，本机默认 `configs/config.local.yaml`；容器显式设为 `/app/configs/config.yaml` |
-| `QDRANT_URL` | 必填的 Qdrant gRPC 地址，如 `http://localhost:6334`；省略端口时默认 6334 |
-| `REDIS_ADDR` / `REDIS_PASSWORD` | 可选 Redis 组件，不参与闭环 |
-
-配置文件另含：`agent`（`max_steps`、`max_tool_calls`、整轮 `timeout_seconds`）、`tool.timeout_seconds`、`execution.timeout_seconds`，以及 `verification.attempts` / `interval_seconds` / `required_successes`（连续验证次数与间隔）。
-
 ### 生产闭环配置
-
-`execution.mode=http` 时配置校验会强制要求（缺任意一项**启动失败**，而不是运行到一半才发现）：
-
-1. `verification.mode=prometheus`（Mock 验证绝不允许关闭真实 Incident）且 `PROMETHEUS_URL` 非空；
-2. `RESTART_WORKER_URL` 与 `RESTART_WORKER_ALLOWED_TARGETS` 非空（白名单为空则拒绝所有 target）；
-3. `ALERT_WEBHOOK_TOKEN` / `API_READ_TOKEN` / `API_ADMIN_TOKEN` 全部非空；
-4. PostgreSQL DSN、RabbitMQ URL、LLM BaseURL/Model 全部非空；
-5. `verification.required_successes ≤ verification.attempts`（不做静默降级，否则等于降低安全强度）。
 
 ```bash
 export ALERT_WEBHOOK_TOKEN=...  API_READ_TOKEN=...  API_ADMIN_TOKEN=...  API_ADMIN_ACTOR=ops@example.com
@@ -189,8 +138,6 @@ Token / 凭证不会写入日志、错误或响应；`/readyz` 只返回 `ok` / 
 | `POST` | `/api/v1/approvals/:id/approve` | admin | 批准（触发处置）；`approved_by` 取自服务端配置 |
 | `POST` | `/api/v1/approvals/:id/reject` | admin | 拒绝 |
 | `GET` | `/healthz` `/readyz` | - | 存活 / 就绪（依赖或配置异常时 `/readyz` 返回 503） |
-
-父资源不存在返回 404（不会伪装成空数组），空集合返回 `[]`。
 
 ## 告警链路（业务系统 → Prometheus → Alertmanager → GoOnCall）
 
@@ -257,15 +204,3 @@ make vet && make fmt            # go vet / gofmt
 ```
 
 CI（`.github/workflows/ci.yml`）执行 `go mod tidy` 检查、`gofmt` 格式检查、`go vet`、`go build ./...` 与单元测试。
-
-## 实现边界
-
-以下为如实说明，避免与设计文档混淆：
-
-- **Demo 不是生产**：显式设置 `execution.mode=mock` 时 `worker_restart` 是模拟执行、验证用固定指标，且允许不启用认证；未配置 DSN 时使用内存仓库（进程重启即丢失）。Compose API 默认只发布到 `127.0.0.1`，仍不要通过反向代理暴露无认证 Demo。
-- **可靠闭环要求显式配置**：真实处置需要 `execution.mode=http` + `verification.mode=prometheus` + 三个 Token + target 白名单（见「生产闭环配置」）。此时处置走固定 URL（不接受任意 URL / Shell / Kubernetes SDK），幂等键为 `approval_id`，只有连续验证通过才会 `RESOLVED`。
-- **SSE 是单进程实验能力**：事件只在本进程内存广播，多副本部署时不会跨进程同步；生产闭环请使用持久化查询 API（`/incidents/:id/events`、`/runs/:id/tool-calls`、`/approvals?status=PENDING`）。
-- **只支持一种自动处置**：`restart_worker`。LLM 只能请求创建审批，不能提供 URL、命令或凭证。
-- **不包含**：前端、通知平台、Outbox、多 Agent 编排（Supervisor 仅为角色占位）、token 级流式输出、reranker 模型服务的部署与性能证明。
-- 去重与审计基于 PostgreSQL（部分唯一索引 + 审计事件）；schema 只由 `migrations/*.sql` 管理，应在 API / Worker 启动前完成。Qdrant 为 RAG 启动依赖；Redis 为可选组件，不参与闭环。
-- `deploy/k8s` 为空占位，目前仅提供 Docker Compose 部署。

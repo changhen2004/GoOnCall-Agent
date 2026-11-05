@@ -78,29 +78,3 @@ auth:
   admin_token: ${API_ADMIN_TOKEN}
   # 批准 / 拒绝落库的 approved_by：服务端配置，请求体里的 approved_by 一律忽略。
   admin_actor: ${API_ADMIN_ACTOR}
-
-# 真实处置通道。mode=mock 用模拟重启（仅本地 Demo）；
-# mode=http 用固定 URL 的 HTTP 适配器，此时必须配置 restart_url、token、
-# allowed_targets、三类认证 Token、Postgres、RabbitMQ、LLM，
-# 并要求 verification.mode=prometheus。
-execution:
-  mode: ${EXECUTION_MODE}
-  restart_url: ${RESTART_WORKER_URL}
-  token: ${RESTART_WORKER_TOKEN}
-  # 逗号分隔的 target 白名单；http 模式必须非空，否则拒绝所有 target。
-  allowed_targets: ${RESTART_WORKER_ALLOWED_TARGETS}
-  timeout_seconds: 30
-
-verification:
-  # mock：固定「已恢复」指标（本地 Demo）；prometheus：实时查询验证指标。
-  mode: ${VERIFICATION_MODE}
-  # 连续验证：最多采集 attempts 次，间隔 interval_seconds，连续 required_successes 次
-  # 全部通过才允许 RESOLVED。required_successes 大于 attempts 会被拒绝启动。
-  attempts: 3
-  interval_seconds: 10
-  required_successes: 3
-  # Prometheus 验证查询（mode=prometheus 时生效）。
-  queries:
-    consumers: 'sum(rabbitmq_queue_consumers)'
-    queue_depth: 'sum(rabbitmq_queue_messages_ready)'
-    error_rate: 'sum(rate(http_requests_total{status=~"5.."}[1m])) / clamp_min(sum(rate(http_requests_total[1m])), 0.001)'

@@ -23,3 +23,6 @@ configs/config.local.yaml
 # Test artifacts
 coverage.out
 *.prof
+
+# docs
+/docs/architecture
