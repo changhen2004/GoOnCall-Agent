@@ -10,13 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"gooncall-agent/internal/bootstrap"
-	"gooncall-agent/internal/config"
+	"gooncall-agent/cmd/internal/knowledgecfg"
+	"gooncall-agent/configs"
 	"gooncall-agent/internal/knowledge/evaluation"
+	"gooncall-agent/internal/knowledge/rag"
 )
 
 func main() {
-	configPath := flag.String("config", "configs/config.local.yaml", "配置文件路径")
+	configPath := flag.String("config", "", "配置文件路径（默认 AGENT_CONFIG 或 configs/config.env）")
 	qrelsPath := flag.String("qrels", "docs/eval/runbook_qrels.jsonl", "标注查询 JSONL")
 	flag.Parse()
 
@@ -35,16 +36,28 @@ func run(configPath, qrelsPath string) error {
 	if err != nil {
 		return err
 	}
-	retriever, err := bootstrap.BuildRunbookRetriever(cfg)
-	if err != nil {
+	if err := cfg.ValidateRAG(); err != nil {
 		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+
+	builder, err := rag.New(knowledgecfg.From(cfg))
+	if err != nil {
+		return err
+	}
+	if _, err := builder.Import(ctx); err != nil {
+		return fmt.Errorf("构建知识库: %w", err)
+	}
+	retrieval, err := builder.Get(ctx)
+	if err != nil {
+		return err
+	}
+
 	runs := make(map[string][]string, len(qrels))
 	for _, qrel := range qrels {
-		results, err := retriever.Retrieve(ctx, qrel.Query, 8)
+		results, err := retrieval.Retrieve(ctx, qrel.Query, 8)
 		if err != nil {
 			return fmt.Errorf("retrieve %s: %w", qrel.ID, err)
 		}
