@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"testing"
 
-	incidentmodel "gooncall-agent/internal/incident/model"
 	kmodel "gooncall-agent/internal/knowledge/model"
 	"gooncall-agent/internal/knowledge/vectorstore"
 )
@@ -313,22 +312,5 @@ func TestVectorSearchCandidateK(t *testing.T) {
 	}
 	if store.lastK != 8 {
 		t.Fatalf("vector Search topK = %d, want max(candidateK, topK)=8", store.lastK)
-	}
-}
-
-func TestResultToEvidence(t *testing.T) {
-	r := Result{
-		Chunk: &kmodel.Chunk{Source: "rabbitmq.md", DocType: "runbook", Title: "消费者异常", Content: "内容"},
-		Score: 0.9,
-	}
-	ev := r.ToEvidence("run_1")
-	if ev.Type != incidentmodel.EvidenceRunbook {
-		t.Fatalf("type = %s", ev.Type)
-	}
-	if ev.RunID != "run_1" || ev.Source != "rabbitmq.md" {
-		t.Fatalf("evidence = %+v", ev)
-	}
-	if ev.ID == "" {
-		t.Fatal("evidence id should not be empty")
 	}
 }

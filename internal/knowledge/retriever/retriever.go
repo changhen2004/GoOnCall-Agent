@@ -10,12 +10,8 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
 
-	"github.com/google/uuid"
-
-	incidentmodel "gooncall-agent/internal/incident/model"
 	"gooncall-agent/internal/knowledge/embedding"
 	kmodel "gooncall-agent/internal/knowledge/model"
 	"gooncall-agent/internal/knowledge/vectorstore"
@@ -204,25 +200,6 @@ func (h *Hybrid) Retrieve(ctx context.Context, query string, topK int) ([]Result
 		out = append(out, Result{Chunk: sc.chunk, Score: sc.score})
 	}
 	return out, nil
-}
-
-// ToEvidence 将检索结果绑定为 RUNBOOK 证据。
-func (r Result) ToEvidence(runID string) *incidentmodel.Evidence {
-	return &incidentmodel.Evidence{
-		ID:      "ev_" + uuid.NewString(),
-		RunID:   runID,
-		Type:    incidentmodel.EvidenceRunbook,
-		Source:  r.Chunk.Source,
-		Content: r.Chunk.Content,
-		Metadata: map[string]any{
-			"doc_id":    r.Chunk.DocID,
-			"doc_type":  r.Chunk.DocType,
-			"component": r.Chunk.Component,
-			"title":     r.Chunk.Title,
-			"score":     r.Score,
-		},
-		CreatedAt: time.Now(),
-	}
 }
 
 // vectorRanks 向量检索（候选集大小 k，而非全量 chunks）并转为 1-based 排名。
