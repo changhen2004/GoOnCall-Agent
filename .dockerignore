@@ -2,4 +2,10 @@
 .env
 bin
 dist
+data
+configs/config.env
 configs/config.local.yaml
+*.db
+*.db-wal
+*.db-shm
+*.lock

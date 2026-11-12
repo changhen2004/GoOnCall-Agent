@@ -9,7 +9,7 @@ on:
 jobs:
   build-and-test:
     name: 构建与测试
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: 检出代码
         uses: actions/checkout@v5

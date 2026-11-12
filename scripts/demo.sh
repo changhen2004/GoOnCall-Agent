@@ -1,47 +1,50 @@
 #!/usr/bin/env bash
-# GoOnCall Agent v1.0 端到端 Demo
-# 用法: BASE_URL=http://127.0.0.1:8082 ./scripts/demo.sh
-# 默认端口 8082：本机 8080 常被 GoCommunity backend 占用，API 需以 SERVER_PORT=8082 启动。
+# 通用 Agent 最小验证脚本。
+# 用法:
+#   AGENT_USERNAME=alice AGENT_PASSWORD='your-password' ./scripts/demo.sh
+# 先通过 cmd/agentadmin 创建账号。
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:8082}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:8091}"
+USERNAME="${AGENT_USERNAME:?请设置 AGENT_USERNAME}"
+PASSWORD="${AGENT_PASSWORD:?请设置 AGENT_PASSWORD}"
 
-echo "==> 1. 模拟 GoCommunity Prometheus 告警（Alertmanager webhook）"
-CREATE=$(curl -s -X POST "${BASE_URL}/api/v1/alerts" -H 'Content-Type: application/json' -d '{
-  "status": "firing",
-  "alerts": [{
-    "status": "firing",
-    "labels": {"alertname": "ResourceCommunityHighErrorRate", "service": "resource_community_go", "severity": "warning"},
-    "annotations": {"summary": "resource_community_go 5xx error rate is high", "description": "5xx error rate is high over the last minute."}
-  }]
-}')
-echo "${CREATE}"
+json_field() {
+  python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get(sys.argv[1], ""))' "$1"
+}
 
-INCIDENT_ID=$(echo "${CREATE}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["created"][0] if d.get("created") else "")')
-if [ -z "${INCIDENT_ID}" ]; then
-  echo "未创建新 Incident（可能已去重）"
+echo "==> 1. 登录"
+LOGIN=$(curl -sS -X POST "${BASE_URL}/v1/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d "$(python3 -c 'import json,os; print(json.dumps({"username": os.environ["AGENT_USERNAME"], "password": os.environ["AGENT_PASSWORD"]}))')")
+TOKEN=$(printf '%s' "${LOGIN}" | json_field token)
+if [ -z "${TOKEN}" ]; then
+  echo "登录失败: ${LOGIN}"
+  exit 1
 fi
+AUTH="Authorization: Bearer ${TOKEN}"
+
+echo "==> 2. 创建会话"
+CONV=$(curl -sS -X POST "${BASE_URL}/v1/conversations" -H "${AUTH}")
+CONV_ID=$(printf '%s' "${CONV}" | json_field id)
+echo "conversation=${CONV_ID}"
+
+echo "==> 3. 提交问题"
+RUN=$(curl -sS -X POST "${BASE_URL}/v1/conversations/${CONV_ID}/messages" \
+  -H "${AUTH}" -H 'Content-Type: application/json' \
+  -d '{"content":"请查看当前有哪些 Prometheus 告警，并检索相关 Runbook。"}')
+RUN_ID=$(printf '%s' "${RUN}" | json_field run_id)
+echo "run=${RUN_ID}"
+
+echo "==> 4. 订阅实时事件（最多 60 秒，Ctrl-C 只断开展示，不取消运行）"
+curl -sS -N --max-time 60 "${BASE_URL}/v1/runs/${RUN_ID}/events" -H "${AUTH}" || true
 
 echo ""
-echo "==> 2. 查看 Incident 列表"
-curl -s "${BASE_URL}/api/v1/incidents"; echo
+echo "==> 5. 查询运行与待审批项"
+curl -sS "${BASE_URL}/v1/runs/${RUN_ID}" -H "${AUTH}"; echo
+curl -sS "${BASE_URL}/v1/runs/${RUN_ID}/approvals" -H "${AUTH}"; echo
 
-echo ""
-echo "==> 3. 分析 Incident（已配置 LLM 时触发诊断 Agent）"
-if [ -n "${INCIDENT_ID}" ]; then
-  curl -s -X POST "${BASE_URL}/api/v1/incidents/${INCIDENT_ID}/analyze"; echo
-fi
+echo "==> 6. 查询完整会话记录"
+curl -sS "${BASE_URL}/v1/conversations/${CONV_ID}" -H "${AUTH}"; echo
 
-echo ""
-echo "==> 4. 告警恢复（关闭 Incident）"
-curl -s -X POST "${BASE_URL}/api/v1/alerts" -H 'Content-Type: application/json' -d '{
-  "status": "resolved",
-  "alerts": [{
-    "status": "resolved",
-    "labels": {"alertname": "ResourceCommunityHighErrorRate", "service": "resource_community_go"},
-    "annotations": {"summary": "resource_community_go 5xx error rate is high"}
-  }]
-}'; echo
-
-echo ""
 echo "==> 完成"

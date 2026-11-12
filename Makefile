@@ -1,37 +1,44 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-BINARY_API := bin/gooncall-api
-BINARY_WORKER := bin/gooncall-worker
+BINARY_AGENT := bin/gooncall-agent
+BINARY_ADMIN := bin/gooncall-agentadmin
+BINARY_KNOWLEDGE := bin/gooncall-knowledge
+BINARY_RAGEVAL := bin/gooncall-rageval
 
-.PHONY: help build test test-unit test-integration rag-eval vet fmt lint run run-worker tidy up down clean
+.PHONY: help build build-agent run-agent admin knowledge-import rag-eval test vet fmt lint tidy up down clean
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-build: ## 构建 API 与 Worker 二进制
+build: ## 构建 Agent、账号管理、知识导入与评测命令
 	@mkdir -p bin
-	go build -buildvcs=false -o $(BINARY_API) ./cmd/api
-	go build -buildvcs=false -o $(BINARY_WORKER) ./cmd/worker
+	go build -buildvcs=false -o $(BINARY_AGENT) ./cmd/agent
+	go build -buildvcs=false -o $(BINARY_ADMIN) ./cmd/agentadmin
+	go build -buildvcs=false -o $(BINARY_KNOWLEDGE) ./cmd/knowledgeimport
+	go build -buildvcs=false -o $(BINARY_RAGEVAL) ./cmd/rageval
 
-run: ## 本地运行 API
-	go run ./cmd/api
+build-agent: ## 只构建 Agent 服务
+	@mkdir -p bin
+	go build -buildvcs=false -o $(BINARY_AGENT) ./cmd/agent
 
-run-worker: ## 本地运行 Worker
-	go run ./cmd/worker
+run-agent: ## 本地运行 Agent 服务（默认 :8091）
+	go run ./cmd/agent
 
-demo: ## 运行端到端 Demo
-	./scripts/demo.sh
+admin: ## 本地账号管理（需在 -- 后传子命令）
+	go run ./cmd/agentadmin
 
-test: test-unit ## 运行单元测试
-test-unit: ## 运行全部单元测试
+knowledge-import: ## 导入 Runbook 知识库（需启用 RAG）
+	go run ./cmd/knowledgeimport
+
+rag-eval: ## 运行 Runbook 检索评测（需启用 RAG）
+	go run ./cmd/rageval
+
+test: ## 运行全部测试
 	go test ./... -count=1
 
-test-integration: ## 运行集成测试（需要 docker compose 环境）
-	go test ./tests/integration/... -count=1 -tags=integration
-
-rag-eval: ## 运行 Runbook 文档级检索评测（需要 Embedding 与 Qdrant）
-	EXECUTION_MODE=mock go run ./cmd/rageval
+test-race: ## 运行关键并发测试
+	go test -race ./internal/auth/... ./internal/session/... ./internal/api/agent/... -count=1
 
 vet: ## go vet
 	go vet ./...
@@ -45,11 +52,11 @@ lint: ## golangci-lint（如已安装）
 tidy: ## 整理依赖
 	go mod tidy
 
-up: ## 启动 docker compose 基础设施
-	EXECUTION_MODE=mock docker compose up -d postgres rabbitmq qdrant prometheus alertmanager grafana
+up: ## 启动本地基础设施（Qdrant / RabbitMQ / Prometheus）
+	docker compose up -d qdrant rabbitmq prometheus
 
-down: ## 停止 docker compose
-	EXECUTION_MODE=mock docker compose down
+down: ## 停止本地基础设施
+	docker compose down
 
 clean: ## 清理构建产物
 	rm -rf bin coverage.out
