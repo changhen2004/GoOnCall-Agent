@@ -1,206 +1,173 @@
 # GoOnCall Agent
 
-> 基于 Go + Eino 的 AIOps Agent：告警接入 → ReAct 故障诊断（+ RAG 知识检索）→ 人工审批 → 自动处置（执行 / 验证 / 复盘）的可观测闭环。
+> 通用运维 Agent：本地账号登录 → HTTP/SSE 会话 → 单 Agent 工具循环 → 只读 Prometheus / RabbitMQ / Runbook-RAG 工具 → 人工审批。
 
-## 简介
-
-GoOnCall Agent 把运维告警处理做成一条可审计的自动链路。Alertmanager 的 webhook 创建 Incident 后，系统通过 RabbitMQ 触发诊断 Agent；Agent 以 ReAct 方式调用工具（Prometheus、RabbitMQ、Runbook、历史 Incident）收集证据并定位根因，产出处置建议。涉及变更的操作先进入人工审批，批准后才执行，再通过指标**连续验证**结果，通过则自动关闭 Incident 并生成 Postmortem。全过程落库并通过持久化查询 API 可查（SSE 仅是单进程实时视图）。
-
-## 功能
-
-- **Incident 生命周期**：告警 webhook 创建 / 关闭工单；创建后自动发布 `agent.requested`（告警即诊断）；同一指纹只允许一条非终态 Incident，终态后复发创建**新的** Incident（新周期、新 ID）；状态迁移由 `version` 乐观锁与严格状态机保护，冲突返回 409。
-- **ReAct 诊断 Agent**：`Incident → Agent → Tool → Result`，注册表式工具调用；未配置 `LLM_MODEL` 时不装配诊断 Agent（`analyze` 仅做状态流转）。
-- **工具集**（按配置启用）：`prometheus_query`、`prometheus_alerts`、`prometheus_range_query`、`rabbitmq_inspect`、`runbook_search`、`incident_history`、`worker_restart`。
-- **RAG 混合检索**：Markdown 加载 → 标题 / 段落 / 句子递归分块（按 Unicode 字符计数）→ Embedding → Qdrant → BM25 + 向量混合检索（RRF 融合）→ 可选 TEI cross-encoder 重排；启动时按 chunk 内容哈希增量索引，未变化的 chunk 跳过重新 embedding。缺少依赖或检索、重排失败时直接报错，不降级；内存向量库仅用于单元测试。
-- **Run 记录与实时事件**：AgentRun / Step / ToolCall 持久化，任一关键审计写入失败都会让本轮诊断失败而非静默成功；同一 Incident 已有活动 Run 时，重复消息直接成功确认，不按时间阈值抢占执行。SSE 推送 Run / Step / Tool 事件；支持 `max_steps`、`max_tool_calls`、整轮诊断超时与单次工具超时。
-- **HITL 人工审批**：风险策略判定 → 审批（批准 / 拒绝）→ 批准后执行。执行权通过数据库条件更新（CAS）获得：`PENDING → APPROVED → EXECUTING → EXECUTED/FAILED/UNKNOWN`，并发或重复批准返回 409 且不会二次执行；`EXPIRED` 表示 Incident 已外部恢复或不再允许执行，`UNKNOWN` 表示外部动作结果未知，两者都需要人工核对，不自动重试。
-- **处置与连续验证**：审批通过 → 执行 `worker_restart`（`execution.mode=mock` 为模拟执行；`mode=http` 调用固定 URL 的 HTTP 适配器，带 Bearer Token 与 `Idempotency-Key: <approval_id>`，target 受白名单限制）→ **连续**验证 `required_successes` 次全部通过才 `RESOLVED` 并生成 Postmortem；采集错误、空结果、`NaN`/`Inf`、验证失败一律进 `FAILED`，绝不按 0 处理。
-- **RabbitMQ 事件驱动与幂等**：API 以 publisher confirm 发布 `agent.requested`（发布失败返回非 2xx，Alertmanager 会重试）；Worker 消费时先查有效 Run，重复消息直接成功确认。同一 Incident 至多一条 `RUNNING/COMPLETED` Run（数据库部分唯一索引）。消费失败重试（最多 3 次、间隔 5s），重投同样走 publisher confirm，**确认进入 DLQ 之后**才把 Incident 置为 `FAILED`。
-- **查询 API**：不依赖 SSE 的持久化查询（Incident 的 Run / 状态与处置事件、`POSTMORTEM_GENERATED` 复盘事件、Run 的 ToolCall / 审批、待审批列表），进程重启后仍可读到完整链路。
-- **最小认证**：webhook（`X-GoOnCall-Webhook-Token`）、读（`Authorization: Bearer`）、admin（Incident 写操作与审批）三类 Token，均使用常量时间比较；`approved_by` 来自服务端配置，请求体伪造无效。
-- **可观测性**：Prometheus 指标（各状态 Incident / 审批数、DLQ 与重试次数、处置与验证结果、闭环总耗时）+ `/healthz` `/readyz`（就绪检查覆盖 PostgreSQL、RabbitMQ 与危险配置）+ Grafana 概览面板。
+本仓库当前只保留通用 Agent 链路；旧 Incident 告警调度、Eino 诊断 Runtime、API/Worker、RabbitMQ 任务消息队列已移除。业务能力以**只读工具**形式接入，写操作仍走新服务的审批机制。
 
 ## 架构
 
-```mermaid
-flowchart TD
-    Biz[业务系统 /metrics] --> Prom[Prometheus]
-    Prom --> AM[Alertmanager]
-    AM -->|webhook| API[GoOnCall API]
-    API --> DB[(PostgreSQL)]
-    API -->|agent.requested| MQ[[RabbitMQ]]
-    MQ --> Worker[Worker]
-    Worker --> Agent[ReAct 诊断 Agent]
-    Agent -->|工具调用| Tools[Prometheus / RabbitMQ / Runbook / Incident]
-    Agent -->|检索| RAG[(向量库：内存 / Qdrant)]
-    Agent -->|变更操作| Approval{人工审批}
-    Approval -->|批准| Exec[执行处置 worker_restart]
-    Exec --> Verify[指标验证]
-    Verify -->|通过| Close[关闭 Incident + Postmortem]
-    Verify -->|失败| Fail[FAILED]
-    Worker --> DB
-    API --> Grafana[Grafana 概览面板]
+```text
+用户 → auth（密码登录 / 随机 Token 会话）
+     → Agent HTTP API（Bearer 认证、SSE）
+     → session（会话归属、运行协调、审批、生命周期）
+     ├─ SQLite（用户、登录会话、会话、运行、消息、工具执行、审批、归属迁移审计）
+     └─ Agent 核心（单次运行、工具循环、上下文预算）
+         └─ 工具注册表
+             ├─ Prometheus（指标 / 范围 / 告警，只读）
+             ├─ RabbitMQ Management API（队列状态，只读）
+             └─ Runbook/RAG（按需检索，返回来源与分数）
 ```
 
-Incident 严格状态机（仅允许主流程，禁止 `INVESTIGATING` 直接 `RESOLVED`）：
-
-```mermaid
-stateDiagram-v2
-    [*] --> OPEN
-    OPEN --> INVESTIGATING
-    INVESTIGATING --> WAITING_APPROVAL
-    WAITING_APPROVAL --> MITIGATING
-    WAITING_APPROVAL --> FAILED
-    MITIGATING --> VERIFYING
-    MITIGATING --> FAILED
-    VERIFYING --> RESOLVED
-    VERIFYING --> FAILED
-    RESOLVED --> [*]
-    FAILED --> [*]
-```
+Agent 核心不依赖 auth、session、store、HTTP 或业务包。
 
 ## 快速开始
 
-### 方式一：本地运行（推荐）
+1. 准备配置：复制 `configs/config.example.env` 为 `configs/config.env`，填写模型、认证会话和需要启用的业务工具。真实配置文件不入库。
+2. 创建账号（密码从标准输入读取）：
 
 ```bash
-make up                      # 启动 postgres / rabbitmq / qdrant / prometheus / alertmanager / grafana
-
-export POSTGRES_DSN='postgres://gooncall:gooncall@localhost:5432/gooncall?sslmode=disable'
-export RABBITMQ_URL='amqp://gooncall:gooncall@localhost:5672/'
-# 诊断大模型配置；如果暂不运行诊断 Agent，可先留空。
-export LLM_BASE_URL='https://api.openai.com/v1'
-export LLM_API_KEY='sk-...'
-export LLM_MODEL='gpt-4o'
-# RAG 使用独立的 Embedding 服务；本机正式配置默认指向 Ollama。
-export EMBEDDING_BASE_URL='http://127.0.0.1:11434/v1'
-export EMBEDDING_MODEL='nomic-embed-text:latest'
-
-go run ./cmd/api             # API，默认 :8080
-go run ./cmd/worker          # Worker（消费事件并运行 Agent）
+go run ./cmd/agentadmin create-user --username alice
 ```
 
-> 本机 `8080` 常被 GoCommunity backend 占用，可用 `SERVER_PORT=8082 go run ./cmd/api`；
-> 此时 `scripts/demo.sh` 默认访问 `8082`。
-
-### 方式二：Docker Compose 全量启动
+3. 启动服务：
 
 ```bash
-# 诊断 LLM 与 Embedding 分别使用 LLM_*、EMBEDDING_* 配置。
-# 容器内使用服务名连接 Qdrant；不要沿用本地运行时的 localhost。
-QDRANT_URL=http://qdrant:6334 EXECUTION_MODE=mock docker compose up -d --build
+go run ./cmd/agent          # 默认 127.0.0.1:8091
+# 或 make run-agent
 ```
 
-PostgreSQL 容器只在首次创建数据卷时按顺序执行 `migrations/*.sql`。升级已有数据库时，请在启动 API / Worker 前由发布流程只执行尚未应用的 SQL 迁移；服务进程不会自动改 schema。
+4. 登录并调用：
+
+```bash
+BASE=http://127.0.0.1:8091
+TOKEN=$(curl -s -X POST $BASE/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"<password>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+AUTH="Authorization: Bearer $TOKEN"
+
+CONV=$(curl -s -X POST $BASE/v1/conversations -H "$AUTH" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+RUN=$(curl -s -X POST $BASE/v1/conversations/$CONV/messages -H "$AUTH" \
+  -H 'Content-Type: application/json' -d '{"content":"查看当前告警并检索 Runbook"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["run_id"])')
+
+curl -N "$BASE/v1/runs/$RUN/events" -H "$AUTH"     # SSE 实时事件
+curl "$BASE/v1/runs/$RUN/approvals" -H "$AUTH"    # 待审批工具与完整参数
+curl -X POST "$BASE/v1/runs/$RUN/cancel" -H "$AUTH"
+```
+
+也可使用 `AGENT_USERNAME=alice AGENT_PASSWORD='...' ./scripts/demo.sh`。
+
+## HTTP 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/v1/auth/login` | 登录，返回一次性原始 Token |
+| POST | `/v1/auth/logout` | 撤销当前 Token；重复调用幂等 |
+| GET | `/v1/me` | 当前用户与会话到期时间 |
+| POST | `/v1/conversations` | 创建会话 |
+| GET | `/v1/conversations/{id}` | 查询会话、消息与运行 |
+| POST | `/v1/conversations/{id}/messages` | 提交消息，后台启动运行 |
+| GET | `/v1/runs/{id}` | 查询运行、工具执行与待审批项 |
+| GET | `/v1/runs/{id}/events` | SSE 实时事件（断连不影响执行） |
+| POST | `/v1/runs/{id}/cancel` | 主动取消运行 |
+| GET | `/v1/runs/{id}/approvals` | 查询待审批项 |
+| POST | `/v1/approvals/{id}/decision` | `{"decision":"approve"\|"reject"}` |
+
+所有会话、运行、SSE、取消与审批接口都会校验会话归属；Token 无效、过期、已撤销或用户禁用时返回 401。
+
+## 账号与会话
+
+- 密码使用 bcrypt；数据库只保存密码哈希。
+- 登录 Token 由密码学安全随机数生成，数据库只保存 SHA-256 摘要。
+- 默认会话有效期 24 小时，固定有效期，不续期、不刷新。
+- 多设备登录相互独立；普通退出只撤销当前 Token。
+- 重置密码撤销该用户全部 Token；禁用用户撤销全部 Token，并由运行中服务在 `user_status_poll_seconds` 周期内取消其活动运行。
+- 登录失败限制为有界内存计数（容量、窗口、次数均可配置），未知账号与错误密码返回相同响应。
+
+管理命令：
+
+```bash
+go run ./cmd/agentadmin create-user  --username alice
+go run ./cmd/agentadmin disable-user --user alice
+go run ./cmd/agentadmin enable-user  --user alice
+go run ./cmd/agentadmin reset-password --user alice
+go run ./cmd/agentadmin migrate-owner --legacy-actor old-admin --user-id <uuid>
+```
+
+`agentadmin` 只写 SQLite，不取得执行进程锁，可与服务同时运行；密码只从标准输入读取。
+
+## 旧身份迁移
+
+旧版本使用固定 Token 操作者字符串，新会话使用稳定用户 ID，并用 `conversations.owner_kind` 区分：
+
+- 旧会话默认 `owner_kind=legacy`，新账号不会自动继承，同名账号也不会。
+- 先备份数据库，再显式迁移：
+
+```bash
+# 建议先停止服务，或使用 SQLite 在线备份
+sqlite3 data/agent.db ".backup 'data/agent.db.bak'"
+go run ./cmd/agentadmin migrate-owner --legacy-actor old-admin --user-id <uuid>
+```
+
+迁移在事务中更新会话归属并写入 `ownership_migrations` 审计记录；重复执行没有可迁移记录时返回 0。消息、运行、工具记录的内容不变。代码回退不能撤销已执行的数据迁移。
+
+## 业务工具
+
+工具必须显式启用；未启用时不注册、不要求配置。启用但配置缺失会在启动时失败；外部服务暂不可达不会阻止登录和其他能力，调用时返回明确错误。
+
+```yaml
+prometheus:
+  enabled: true
+  url: ${PROMETHEUS_URL}
+
+rabbitmq:
+  enabled: true
+  management_url: ${RABBITMQ_MANAGEMENT_URL}
+  username: ${RABBITMQ_USERNAME}
+  password: ${RABBITMQ_PASSWORD}
+
+rag:
+  enabled: true
+  docs_dir: docs
+  top_k: 8
+  candidate_k: 20
+```
+
+- `prometheus_query` / `prometheus_range_query` / `prometheus_alerts`
+- `rabbitmq_queue_status`
+- `knowledge_search`（Runbook 混合检索）
+
+限制：单次工具超时 `tool.timeout_seconds`；范围查询最多 24 小时、每序列最多 100 点；结果数量与字节数有上限并返回 `truncated` 标识；RAG 内容截断带 `content_truncated`。工具参数只包含查询条件，URL、凭据和资源选择由服务端配置，模型不能指定任意地址。
+
+示例工具默认关闭；本地验证可设置 `agent_service.demo_tools_enabled: true`，它只操作临时目录。
+
+## 知识导入与评测
+
+```bash
+# 导入 docs/runbooks 到 Qdrant（需要 rag.enabled=true）
+go run ./cmd/knowledgeimport
+
+# 运行文档级检索评测，保留 Recall@k、MRR、NDCG@5 与分组件报告
+go run ./cmd/rageval -qrels docs/eval/runbook_qrels.jsonl
+```
+
+真实 Embedding、Qdrant、重排服务未配置时不会执行这两类联调。
 
 ## 配置
 
-```bash
-cp configs/config.example.yaml configs/config.local.yaml
-```
+- `configs/config.go`：结构、加载与校验。
+- `configs/config.env`：本机真实配置（不入库）。
+- `configs/config.example.env`：脱敏模板。
 
-Docker 镜像只复制模板，并在容器内保存为 `/app/configs/config.yaml`；Compose 通过环境变量注入正式值。本机配置和 `.env` 均被排除在构建上下文之外。
+覆盖顺序：文件值 → `${ENV}` 展开 → `AGENT_*` / 业务服务环境变量 → 内置默认值。模型 API Key 可用 `api_key` 或 `api_key_env`。日志与接口不输出密钥。
 
-### 生产闭环配置
-
-```bash
-export ALERT_WEBHOOK_TOKEN=...  API_READ_TOKEN=...  API_ADMIN_TOKEN=...  API_ADMIN_ACTOR=ops@example.com
-export EXECUTION_MODE=http  RESTART_WORKER_URL=https://deploy.internal/api/restart  RESTART_WORKER_TOKEN=...
-export RESTART_WORKER_ALLOWED_TARGETS=resource-community-worker
-export VERIFICATION_MODE=prometheus  PROMETHEUS_URL=http://prometheus:9090
-export POSTGRES_DSN=...  RABBITMQ_URL=...  LLM_BASE_URL=...  LLM_MODEL=...
-```
-
-Token / 凭证不会写入日志、错误或响应；`/readyz` 只返回 `ok` / `unavailable`，详细原因写服务端日志。
-
-## API
-
-认证列：`webhook` = `X-GoOnCall-Webhook-Token`；`read` = `Authorization: Bearer <API_READ_TOKEN>`（admin Token 同时具备读权限）；`admin` = 只接受 admin Token。
-
-| 方法 | 路径 | 认证 | 说明 |
-|---|---|---|---|
-| `POST` | `/api/v1/alerts` | webhook | Alertmanager webhook，创建 / 关闭 Incident（发布失败返回非 2xx） |
-| `POST` | `/api/v1/incidents` | admin | 创建 Incident（指纹去重） |
-| `GET` | `/api/v1/incidents` | read | 列表 |
-| `GET` | `/api/v1/incidents/:id` | read | 详情 |
-| `POST` | `/api/v1/incidents/:id/analyze` | admin | 进入调查并触发诊断 Agent |
-| `POST` | `/api/v1/incidents/:id/resolve` | admin | 关闭 |
-| `GET` | `/api/v1/incidents/:id/runs` | read | Run 列表（StartedAt 倒序） |
-| `GET` | `/api/v1/incidents/:id/events` | read | Incident 审计事件（时间正序） |
-| `GET` | `/api/v1/runs/:id` | read | Agent Run 详情 |
-| `GET` | `/api/v1/runs/:id/steps` | read | 步骤 |
-| `GET` | `/api/v1/runs/:id/evidences` | read | 证据 |
-| `GET` | `/api/v1/runs/:id/tool-calls` | read | 工具调用（CreatedAt 正序） |
-| `GET` | `/api/v1/runs/:id/approvals` | read | 该 Run 的审批（CreatedAt 正序） |
-| `GET` | `/api/v1/runs/:id/stream` | read | SSE 事件流（**单进程实验能力**） |
-| `GET` | `/api/v1/approvals` | read | 待审批列表（`?status=PENDING`） |
-| `GET` | `/api/v1/approvals/:id` | read | 审批详情 |
-| `POST` | `/api/v1/approvals/:id/approve` | admin | 批准（触发处置）；`approved_by` 取自服务端配置 |
-| `POST` | `/api/v1/approvals/:id/reject` | admin | 拒绝 |
-| `GET` | `/healthz` `/readyz` | - | 存活 / 就绪（依赖或配置异常时 `/readyz` 返回 503） |
-
-## 告警链路（业务系统 → Prometheus → Alertmanager → GoOnCall）
-
-```text
-业务系统 /metrics → Prometheus（规则评估）→ Alertmanager（分组去重）→ webhook → GoOnCall /api/v1/alerts → Incident
-```
-
-| 环节 | 当前落地 |
-|---|---|
-| 业务系统 | GoCommunity backend（`resource_community_go`，`/metrics` 暴露 `resource_community_http_*`） |
-| Prometheus | GoCommunity 自带实例（宿主机 `:9091`） |
-| Alertmanager | 本仓库 compose 服务（宿主机 `:9093`），配置 `deploy/alertmanager/alertmanager.yml` |
-| 对接 | GoCommunity Prometheus `alerting → host.docker.internal:9093`；Alertmanager webhook → `http://gooncall-api:8080/api/v1/alerts`（`send_resolved: true`，恢复时关闭 Incident） |
+## 验证
 
 ```bash
-EXECUTION_MODE=mock docker compose up -d alertmanager
-curl localhost:9093/-/healthy          # Alertmanager 存活
-curl localhost:9093/api/v2/alerts      # Alertmanager 实际收到的告警
+go build ./...
+go test ./... -count=1
+go vet ./...
+go test -race ./internal/auth/... ./internal/session/... ./internal/api/agent/... -count=1
 ```
 
-> Alertmanager 不支持配置内 `${VAR}` 插值，webhook URL 硬编码在 `deploy/alertmanager/alertmanager.yml`。API 在宿主机运行时改为 `http://host.docker.internal:8082/api/v1/alerts`（compose 已配置 `extra_hosts`）。
-
-## 项目结构
-
-```text
-GoOnCall-Agent/
-├── cmd/
-│   ├── api/             # HTTP API 入口
-│   └── worker/          # 消费事件并运行 Agent 的入口
-├── internal/
-│   ├── api/             # handler / router / middleware / dto
-│   ├── agent/
-│   │   ├── diagnosis/   # Eino ReAct 诊断 Agent
-│   │   ├── runtime/     # 运行时：Run 录制、SSE 广播、工具限流与超时
-│   │   └── supervisor/  # 多 Agent 编排占位
-│   ├── bootstrap/       # 应用装配（config / database / knowledge / tools / messaging / agent / server）
-│   ├── config/          # 配置加载
-│   ├── execution/       # policy / approval / executor（处置编排）/ verifier / postmortem
-│   ├── incident/        # model / repository / service / state_machine
-│   ├── knowledge/       # loader / splitter / embedding / retriever / vectorstore（含 qdrant）
-│   ├── messaging/       # 事件生产 / 消费、重试与 DLQ
-│   ├── observability/   # Prometheus 指标
-│   ├── storage/         # postgres / redis
-│   └── tool/            # registry / prometheus / rabbitmq / runbook / incident / deployment
-├── configs/
-│   └── config.example.yaml  # 可提交的配置模板；config.local.yaml 为本机正式配置且不入库
-├── deploy/              # docker / prometheus / alertmanager / grafana / k8s（占位）
-├── migrations/          # SQL 迁移
-├── prompts/             # Agent 提示词
-├── docs/                # runbooks / postmortems / architecture 知识源
-├── scripts/demo.sh      # 端到端 Demo
-├── tests/               # integration（HTTP 处置 + Prometheus stub 全链路）
-├── docker-compose.yml
-└── Makefile
-```
-
-## 测试与 CI
-
-```bash
-make test                       # go test ./... -count=1
-make test-integration           # 集成测试（本地 httptest stub，无需 docker 或外部凭证）
-make rag-eval                   # Runbook 文档级 Recall@3/5/8（需先人工审核 qrels）
-make vet && make fmt            # go vet / gofmt
-```
-
-CI（`.github/workflows/ci.yml`）执行 `go mod tidy` 检查、`gofmt` 格式检查、`go vet`、`go build ./...` 与单元测试。
+单元测试使用 `httptest` 覆盖认证、登录限制、跨用户隔离、审批、SQLite、SSE 断连、上下文裁剪、工具截断与 RAG 懒加载；真实模型、Prometheus、RabbitMQ、Qdrant 需单独联调，不把模拟测试称为真实接入验证。

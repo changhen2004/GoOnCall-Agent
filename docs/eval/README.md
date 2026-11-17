@@ -4,7 +4,7 @@
 
 人工检查每条查询及 `relevant_doc_ids` 后，将 `reviewed` 改为 `true`。`make rag-eval` 会拒绝任何未审核记录，避免用模型生成的标签作为正式验收依据。
 
-运行评测需要配置 Embedding 与 Qdrant：
+运行评测需要在 `configs/config.env` 中设置 `rag.enabled: true`，并配置 Embedding 与 Qdrant：
 
 ```bash
 make rag-eval
@@ -14,11 +14,11 @@ make rag-eval
 
 ## BM25 与 reranker 验收
 
-先在 `configs/config.local.yaml` 中关闭 reranker，保存 `BM25 + 向量 + RRF` 基线；再把 `rag.reranker` 配成下面的 Qwen 参数并启用，使用同一份 qrels 复测。`base_url` 填 DashScope API 的 `/api/v1` 前缀，适配器会追加文本重排路径：
+先在 `configs/config.env` 中关闭 reranker，保存 `BM25 + 向量 + RRF` 基线；再把 `rag.reranker` 配成下面的 Qwen 参数并启用，使用同一份 qrels 复测。`base_url` 填 DashScope API 的 `/api/v1` 前缀，适配器会追加文本重排路径：
 
 ```bash
 make rag-eval > /tmp/rag-baseline.json
-# 在 config.local.yaml 中设置 enabled=true、provider=qwen、base_url=https://maas.qianwenaiapi.com/api/v1、model=qwen3-rerank
+# 在 config.env 中设置 enabled=true、provider=qwen、base_url=https://maas.qianwenaiapi.com/api/v1、model=qwen3-rerank
 make rag-eval > /tmp/rag-reranker.json
 ```
 
